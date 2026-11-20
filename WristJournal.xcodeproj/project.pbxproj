@@ -1,0 +1,523 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+
+	};
+	objectVersion = 56;
+	objects = {
+		AB97FA3174CA598F8FCBC7D1 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = CompanionTransfer.swift;
+			sourceTree = "<group>";
+		};
+		050A1A4591E855F690165641 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = JournalStore.swift;
+			sourceTree = "<group>";
+		};
+		131361271D205D7A9A9118FF = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = LocalPlayback.swift;
+			sourceTree = "<group>";
+		};
+		497531FA77E65A7892646CA9 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = Models.swift;
+			sourceTree = "<group>";
+		};
+		1C5062FB2B1F55E59FF914BB = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ReportLabels.swift;
+			sourceTree = "<group>";
+		};
+		32944B30EF9159D88124B617 = {
+			isa = PBXGroup;
+			path = Shared;
+			sourceTree = "<group>";
+			children = (
+				AB97FA3174CA598F8FCBC7D1,
+				050A1A4591E855F690165641,
+				131361271D205D7A9A9118FF,
+				497531FA77E65A7892646CA9,
+				1C5062FB2B1F55E59FF914BB,
+			);
+		};
+		1EAEDDC153E65AAFACF4F45E = {
+			isa = PBXFileReference;
+			lastKnownFileType = folder.assetcatalog;
+			path = Assets.xcassets;
+			sourceTree = "<group>";
+		};
+		E2C912A5B09B533C9B47E76E = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = Export.swift;
+			sourceTree = "<group>";
+		};
+		4D0D9A704AF45790A2748199 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = PhoneJournal.swift;
+			sourceTree = "<group>";
+		};
+		2C0BF1CC7F755CF3AC1C8286 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WristJournalPhone.swift;
+			sourceTree = "<group>";
+		};
+		6612A45DB7705EC08D089494 = {
+			isa = PBXGroup;
+			path = Phone;
+			sourceTree = "<group>";
+			children = (
+				1EAEDDC153E65AAFACF4F45E,
+				E2C912A5B09B533C9B47E76E,
+				4D0D9A704AF45790A2748199,
+				2C0BF1CC7F755CF3AC1C8286,
+			);
+		};
+		DE50420CAAA2504EB9460349 = {
+			isa = PBXFileReference;
+			lastKnownFileType = folder.assetcatalog;
+			path = Assets.xcassets;
+			sourceTree = "<group>";
+		};
+		B399D964CAD3562986A67802 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = HealthReader.swift;
+			sourceTree = "<group>";
+		};
+		33B11CB85D12526E92184020 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info.plist;
+			sourceTree = "<group>";
+		};
+		811D92559B5C518D87702AFA = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WatchJournal.swift;
+			sourceTree = "<group>";
+		};
+		EF1DB98FC1CA55EF81E9F39C = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = WristJournal.entitlements;
+			sourceTree = "<group>";
+		};
+		46BD11CA5CAA5D7FB8AC566C = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WristJournalWatch.swift;
+			sourceTree = "<group>";
+		};
+		C29179A68DD854769954E79F = {
+			isa = PBXGroup;
+			path = Watch;
+			sourceTree = "<group>";
+			children = (
+				DE50420CAAA2504EB9460349,
+				B399D964CAD3562986A67802,
+				33B11CB85D12526E92184020,
+				811D92559B5C518D87702AFA,
+				EF1DB98FC1CA55EF81E9F39C,
+				46BD11CA5CAA5D7FB8AC566C,
+			);
+		};
+		8717C7FD36EA5C30BB524799 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.application;
+			path = WristJournalWatch.app;
+			sourceTree = BUILT_PRODUCTS_DIR;
+			includeInIndex = 0;
+		};
+		4A82EC75289A5EF39DDDA4D5 = {
+			isa = PBXBuildFile;
+			fileRef = AB97FA3174CA598F8FCBC7D1;
+		};
+		4B5E75CC2F63502EA6A80FD4 = {
+			isa = PBXBuildFile;
+			fileRef = 050A1A4591E855F690165641;
+		};
+		417EC536329E55799A9E30A1 = {
+			isa = PBXBuildFile;
+			fileRef = 131361271D205D7A9A9118FF;
+		};
+		6943A105AAF35C129BA6B535 = {
+			isa = PBXBuildFile;
+			fileRef = 497531FA77E65A7892646CA9;
+		};
+		546C1C51EAC25D2C8298FFFE = {
+			isa = PBXBuildFile;
+			fileRef = 1C5062FB2B1F55E59FF914BB;
+		};
+		AA3F2B0861695945B75B4EF1 = {
+			isa = PBXBuildFile;
+			fileRef = B399D964CAD3562986A67802;
+		};
+		E7099E51065C5C26AAB26D33 = {
+			isa = PBXBuildFile;
+			fileRef = 811D92559B5C518D87702AFA;
+		};
+		859361C6B2D25A97B091060C = {
+			isa = PBXBuildFile;
+			fileRef = 46BD11CA5CAA5D7FB8AC566C;
+		};
+		F29914EC29755DB08CD3BFC8 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A82EC75289A5EF39DDDA4D5,
+				4B5E75CC2F63502EA6A80FD4,
+				417EC536329E55799A9E30A1,
+				6943A105AAF35C129BA6B535,
+				546C1C51EAC25D2C8298FFFE,
+				AA3F2B0861695945B75B4EF1,
+				E7099E51065C5C26AAB26D33,
+				859361C6B2D25A97B091060C,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9961B0FDD8305B15BDE2B309 = {
+			isa = PBXBuildFile;
+			fileRef = DE50420CAAA2504EB9460349;
+		};
+		90C0AD2A5AEC58AA862116EB = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9961B0FDD8305B15BDE2B309,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D54503CB5FC85CE5943680EE = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				CODE_SIGN_ENTITLEMENTS = Watch/WristJournal.entitlements;
+				INFOPLIST_FILE = Watch/Info.plist;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = io.github.shikanon.wristjournal;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal.watchkitapp;
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		6EDC246BC9E95ACF8B94533C = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				CODE_SIGN_ENTITLEMENTS = Watch/WristJournal.entitlements;
+				INFOPLIST_FILE = Watch/Info.plist;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = io.github.shikanon.wristjournal;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal.watchkitapp;
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		6A94227ADDCA5EE3B43C18BF = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D54503CB5FC85CE5943680EE,
+				6EDC246BC9E95ACF8B94533C,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9736554047A55D9D8EF556E0 = {
+			isa = PBXNativeTarget;
+			name = WristJournalWatch;
+			productName = WristJournalWatch;
+			buildConfigurationList = 6A94227ADDCA5EE3B43C18BF;
+			buildPhases = (
+				F29914EC29755DB08CD3BFC8,
+				90C0AD2A5AEC58AA862116EB,
+			);
+			buildRules = (
+
+			);
+			dependencies = (
+
+			);
+			productReference = 8717C7FD36EA5C30BB524799;
+			productType = "com.apple.product-type.application";
+		};
+		CB1DBB19014C59CC9EBA5A23 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4E708019C2AA507CA0CBF6FD;
+			proxyType = 1;
+			remoteGlobalIDString = 9736554047A55D9D8EF556E0;
+			remoteInfo = WristJournalWatch;
+		};
+		C6443655D49B54238596CEBC = {
+			isa = PBXTargetDependency;
+			target = 9736554047A55D9D8EF556E0;
+			targetProxy = CB1DBB19014C59CC9EBA5A23;
+		};
+		17C8E185A1B05D5093F10C3B = {
+			isa = PBXBuildFile;
+			fileRef = 8717C7FD36EA5C30BB524799;
+			settings = {
+				ATTRIBUTES = (
+					RemoveHeadersOnCopy,
+				);
+			};
+		};
+		DBCEDA492422545185C83136 = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				17C8E185A1B05D5093F10C3B,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2FE058DA225D5C45B34955E0 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.application;
+			path = WristJournal.app;
+			sourceTree = BUILT_PRODUCTS_DIR;
+			includeInIndex = 0;
+		};
+		E0A1E78731075E9483308BC3 = {
+			isa = PBXBuildFile;
+			fileRef = AB97FA3174CA598F8FCBC7D1;
+		};
+		6B5FA84F4AC95BB1AEE01460 = {
+			isa = PBXBuildFile;
+			fileRef = 050A1A4591E855F690165641;
+		};
+		9DB8A9B8B96D58798DD94571 = {
+			isa = PBXBuildFile;
+			fileRef = 131361271D205D7A9A9118FF;
+		};
+		F5C0B20C13D35C12A9AC41D8 = {
+			isa = PBXBuildFile;
+			fileRef = 497531FA77E65A7892646CA9;
+		};
+		2C086BC8E211520B83EED4BA = {
+			isa = PBXBuildFile;
+			fileRef = 1C5062FB2B1F55E59FF914BB;
+		};
+		B01F8CC08848547EA27F12BB = {
+			isa = PBXBuildFile;
+			fileRef = E2C912A5B09B533C9B47E76E;
+		};
+		1544ADA4A5995C759CD83F4A = {
+			isa = PBXBuildFile;
+			fileRef = 4D0D9A704AF45790A2748199;
+		};
+		8192EB1BC0DB51B18BBBCDF7 = {
+			isa = PBXBuildFile;
+			fileRef = 2C0BF1CC7F755CF3AC1C8286;
+		};
+		8A08A8CBB3AE5CFD8059CAC8 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E0A1E78731075E9483308BC3,
+				6B5FA84F4AC95BB1AEE01460,
+				9DB8A9B8B96D58798DD94571,
+				F5C0B20C13D35C12A9AC41D8,
+				2C086BC8E211520B83EED4BA,
+				B01F8CC08848547EA27F12BB,
+				1544ADA4A5995C759CD83F4A,
+				8192EB1BC0DB51B18BBBCDF7,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		862853D4E30859F18060F357 = {
+			isa = PBXBuildFile;
+			fileRef = 1EAEDDC153E65AAFACF4F45E;
+		};
+		6BEEB041020F5CC5B548D418 = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				862853D4E30859F18060F357,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5DE2BEE910D4535D94CC38C3 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		E0FAF09688625006857CF488 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		EB864896611D594396B37867 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5DE2BEE910D4535D94CC38C3,
+				E0FAF09688625006857CF488,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EFDA866860395C7E93B16697 = {
+			isa = PBXNativeTarget;
+			name = WristJournal;
+			productName = WristJournal;
+			buildConfigurationList = EB864896611D594396B37867;
+			buildPhases = (
+				8A08A8CBB3AE5CFD8059CAC8,
+				6BEEB041020F5CC5B548D418,
+				DBCEDA492422545185C83136,
+			);
+			buildRules = (
+
+			);
+			dependencies = (
+				C6443655D49B54238596CEBC,
+			);
+			productReference = 2FE058DA225D5C45B34955E0;
+			productType = "com.apple.product-type.application";
+		};
+		6606FF85B456507A8AD02744 = {
+			isa = PBXGroup;
+			children = (
+				2FE058DA225D5C45B34955E0,
+				8717C7FD36EA5C30BB524799,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		50CFC6CF2D555C6CA15AFF18 = {
+			isa = PBXGroup;
+			children = (
+				32944B30EF9159D88124B617,
+				6612A45DB7705EC08D089494,
+				C29179A68DD854769954E79F,
+				6606FF85B456507A8AD02744,
+			);
+			sourceTree = "<group>";
+		};
+		92308FCA75AF53B982811460 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				SWIFT_VERSION = 5.0;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+			};
+			name = Debug;
+		};
+		9C70AA8C14C957A3BA05A700 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				SWIFT_VERSION = 5.0;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+			};
+			name = Release;
+		};
+		6285FB838CC4518B98E497E0 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				92308FCA75AF53B982811460,
+				9C70AA8C14C957A3BA05A700,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4E708019C2AA507CA0CBF6FD = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					9736554047A55D9D8EF556E0 = {
+						SystemCapabilities = {
+							com.apple.HealthKit = {
+								enabled = 1;
+							};
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+						};
+					};
+				};
+			};
+			buildConfigurationList = 6285FB838CC4518B98E497E0;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				Base,
+			);
+			mainGroup = 50CFC6CF2D555C6CA15AFF18;
+			productRefGroup = 6606FF85B456507A8AD02744;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EFDA866860395C7E93B16697,
+				9736554047A55D9D8EF556E0,
+			);
+		};
+	};
+	rootObject = 4E708019C2AA507CA0CBF6FD;
+}
