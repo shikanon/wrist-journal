@@ -6,6 +6,23 @@
 	};
 	objectVersion = 56;
 	objects = {
+		A10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyInsights.swift; sourceTree = "<group>"; };
+		A10000000000000000000002 = { isa = PBXBuildFile; fileRef = A10000000000000000000001; };
+		A10000000000000000000003 = { isa = PBXBuildFile; fileRef = A10000000000000000000001; };
+		A10000000000000000000004 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthTypes.swift; sourceTree = "<group>"; };
+		A10000000000000000000005 = { isa = PBXBuildFile; fileRef = A10000000000000000000004; };
+		A10000000000000000000006 = { isa = PBXBuildFile; fileRef = A10000000000000000000004; };
+		A10000000000000000000007 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyHealthReader.swift; sourceTree = "<group>"; };
+		A10000000000000000000008 = { isa = PBXBuildFile; fileRef = A10000000000000000000007; };
+		A10000000000000000000009 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyPipeline.swift; sourceTree = "<group>"; };
+		A1000000000000000000000A = { isa = PBXBuildFile; fileRef = A10000000000000000000009; };
+		A1000000000000000000000B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudBackup.swift; sourceTree = "<group>"; };
+		A1000000000000000000000C = { isa = PBXBuildFile; fileRef = A1000000000000000000000B; };
+		A1000000000000000000000D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisScheduling.swift; sourceTree = "<group>"; };
+		A1000000000000000000000E = { isa = PBXBuildFile; fileRef = A1000000000000000000000D; };
+		A1000000000000000000000F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalReviewView.swift; sourceTree = "<group>"; };
+		A10000000000000000000010 = { isa = PBXBuildFile; fileRef = A1000000000000000000000F; };
+		A10000000000000000000011 = { isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BB721ABFE0FA4D608BEC34D3 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -224,6 +241,8 @@
 			path = Shared;
 			sourceTree = "<group>";
 			children = (
+				A10000000000000000000001,
+				A10000000000000000000004,
 				AB97FA3174CA598F8FCBC7D1,
 				050A1A4591E855F690165641,
 				131361271D205D7A9A9118FF,
@@ -260,6 +279,12 @@
 			path = Phone;
 			sourceTree = "<group>";
 			children = (
+				A10000000000000000000007,
+				A10000000000000000000009,
+				A1000000000000000000000B,
+				A1000000000000000000000D,
+				A1000000000000000000000F,
+				A10000000000000000000011,
 				1EAEDDC153E65AAFACF4F45E,
 				E2C912A5B09B533C9B47E76E,
 				4D0D9A704AF45790A2748199,
@@ -360,6 +385,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000003,
+				A10000000000000000000006,
 				4A82EC75289A5EF39DDDA4D5,
 				4B5E75CC2F63502EA6A80FD4,
 				417EC536329E55799A9E30A1,
@@ -529,6 +556,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000002,
+				A10000000000000000000005,
+				A10000000000000000000008,
+				A1000000000000000000000A,
+				A1000000000000000000000C,
+				A1000000000000000000000E,
+				A10000000000000000000010,
 				E0A1E78731075E9483308BC3,
 				6B5FA84F4AC95BB1AEE01460,
 				9DB8A9B8B96D58798DD94571,
@@ -564,7 +598,8 @@
 				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Phone/WristJournal.entitlements;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "你选择分析会议背景时，读取录制时段的心率并生成汇总。";
+				INFOPLIST_FILE = Phone/Info.plist;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "按你的设置读取每日健康、会议心率及运动数据，在本地生成回顾与时间关联。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -586,7 +621,8 @@
 				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Phone/WristJournal.entitlements;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "你选择分析会议背景时，读取录制时段的心率并生成汇总。";
+				INFOPLIST_FILE = Phone/Info.plist;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "按你的设置读取每日健康、会议心率及运动数据，在本地生成回顾与时间关联。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -685,6 +721,8 @@
 				TargetAttributes = {
 					EFDA866860395C7E93B16697 = {
 						SystemCapabilities = {
+							com.apple.iCloud = { enabled = 1; };
+							com.apple.BackgroundModes = { enabled = 1; };
 							com.apple.HealthKit = {
 								enabled = 1;
 							};

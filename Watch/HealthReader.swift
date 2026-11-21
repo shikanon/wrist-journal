@@ -44,49 +44,26 @@ final class HealthReader {
                              calendar: Calendar, days: [HealthDay]) async throws -> [Date: Measurement] {
         let boundaries = HKQuery.predicateForSamples(withStart: start, end: end, options: [.strictEndDate])
         let predicate = HKSamplePredicate.quantitySample(type: metric.quantityType, predicate: boundaries)
-        if metric.isCumulative {
+        do {
             let query = HKStatisticsCollectionQueryDescriptor(
-                predicate: predicate, options: .cumulativeSum, anchorDate: start,
+                predicate: predicate,
+                options: metric.isCumulative ? .cumulativeSum : [.discreteAverage, .discreteMin, .discreteMax],
+                anchorDate: start,
                 intervalComponents: DateComponents(calendar: calendar, timeZone: calendar.timeZone, day: 1)
             )
             let statistics = try await query.result(for: store)
             var values: [Date: Measurement] = [:]
             for day in days {
-                if let quantity = statistics.statistics(for: day.start)?.sumQuantity() {
-                    values[day.start] = Measurement(total: quantity.doubleValue(for: metric.healthUnit))
+                if let stats = statistics.statistics(for: day.start),
+                   let quantity = metric.isCumulative ? stats.sumQuantity() : stats.averageQuantity() {
+                    values[day.start] = metric.isCumulative ? Measurement(total: quantity.doubleValue(for: metric.healthUnit))
+                        : Measurement(value: quantity.doubleValue(for: metric.healthUnit),
+                                      minimum: stats.minimumQuantity()?.doubleValue(for: metric.healthUnit),
+                                      maximum: stats.maximumQuantity()?.doubleValue(for: metric.healthUnit))
                 }
             }
             return values
         }
 
-        let samples = try await HKSampleQueryDescriptor(predicates: [predicate], sortDescriptors: [])
-            .result(for: store)
-        var byDay: [Date: [Double]] = [:]
-        for sample in samples where sample.startDate >= start && sample.startDate < end {
-            byDay[calendar.startOfDay(for: sample.startDate), default: []]
-                .append(sample.quantity.doubleValue(for: metric.healthUnit))
-        }
-        return byDay.compactMapValues(Measurement.init(samples:))
-    }
-}
-
-private extension HealthMetric {
-    var quantityType: HKQuantityType {
-        switch self {
-        case .heartRate: HKQuantityType(.heartRate)
-        case .restingHeartRate: HKQuantityType(.restingHeartRate)
-        case .variability: HKQuantityType(.heartRateVariabilitySDNN)
-        case .steps: HKQuantityType(.stepCount)
-        case .activeEnergy: HKQuantityType(.activeEnergyBurned)
-        }
-    }
-
-    var healthUnit: HKUnit {
-        switch self {
-        case .heartRate, .restingHeartRate: .count().unitDivided(by: .minute())
-        case .variability: .secondUnit(with: .milli)
-        case .steps: .count()
-        case .activeEnergy: .kilocalorie()
-        }
     }
 }

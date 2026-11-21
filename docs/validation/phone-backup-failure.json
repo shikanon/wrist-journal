@@ -1,0 +1,11 @@
+{
+  "eventCount": 1,
+  "originalExists": true,
+  "minutesPreserved": true,
+  "damagedDayRetained": false,
+  "meetingCount": 1,
+  "healthDayCount": 6,
+  "weeklyMonthlyVerified": true,
+  "passed": true,
+  "scenario": "backup-failure"
+}

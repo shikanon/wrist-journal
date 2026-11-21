@@ -7,27 +7,49 @@ import UniformTypeIdentifiers
 struct WristJournalPhone: App {
     @StateObject private var journal: PhoneJournal
     @Environment(\.scenePhase) private var phase
+    @State private var tab = 0
 
     init() {
         let journal = PhoneJournal()
         _journal = StateObject(wrappedValue: journal)
+        AnalysisScheduling.register(journal: journal)
+        AnalysisScheduling.schedule(settings: journal.dailySettings)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { _tab = State(initialValue: 2) }
+        #endif
     }
 
     var body: some Scene {
         WindowGroup {
-            TabView {
+            TabView(selection: $tab) {
                 NavigationStack { PhoneRecordings(journal: journal) }
                     .tabItem { Label("录音", systemImage: "waveform") }
+                    .tag(0)
                 NavigationStack { PhoneHealth(journal: journal) }
                     .tabItem { Label("健康", systemImage: "heart.text.clipboard") }
+                    .tag(1)
+                NavigationStack { JournalReviewView(journal: journal) }
+                    .tabItem { Label("回顾", systemImage: "calendar") }
+                    .tag(2)
                 NavigationStack { JournalSettings(journal: journal) }
                     .tabItem { Label("设置", systemImage: "gearshape") }
+                    .tag(3)
             }
             .tint(.teal)
             .modifier(JournalNotice(message: $journal.message))
-            .task { journal.resumeAnalysis() }
+            .task {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") { await journal.runSimulation() }
+                if ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { journal.verifySimulationPersistence() }
+                #endif
+                journal.foregroundEntered()
+            }
             .onChange(of: phase) {
-                if phase == .active { journal.resumeAnalysis() }
+                if phase == .active {
+                    journal.foregroundEntered()
+                }
+                if phase == .background { journal.foregroundExited() }
             }
         }
     }
@@ -67,6 +89,9 @@ private struct PhoneRecordings: View {
                                     if let job = journal.jobs[entry.id], job.state == .complete {
                                         Text("会议纪要已生成").font(.caption).foregroundStyle(.secondary)
                                     }
+                                    if entry.rawDeletedAt != nil {
+                                        Text("原音已清理 · 纪要在回顾中保留").font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -102,7 +127,6 @@ private struct PhoneRecording: View {
     @State private var scrubbing = false
     @State private var confirmingDelete = false
     @State private var confirmingAnalysis = false
-    private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
 
     var body: some View {
         List {
@@ -113,8 +137,13 @@ private struct PhoneRecording: View {
                         Text("录音中断，已保存可播放部分。").foregroundStyle(.secondary)
                     }
                     if !entry.note.isEmpty { Text(entry.note).textSelection(.enabled) }
+                    if let location = entry.location {
+                        Text("会议地点（粗略）：\(location.description)").textSelection(.enabled)
+                    }
+                    if let zone = entry.timeZoneIdentifier { Text(zone).font(.caption).foregroundStyle(.secondary) }
                 }
-                Section("播放") {
+                if entry.isPlayable {
+                    Section("播放") {
                     VStack {
                         Slider(value: $position, in: 0...entry.duration) { editing in
                             scrubbing = editing
@@ -141,12 +170,16 @@ private struct PhoneRecording: View {
                     } label: {
                         Label(playback.playing ? "暂停" : "播放", systemImage: playback.playing ? "pause.fill" : "play.fill")
                     }
-                }
-                if let url = try? journal.store.audio(id) {
-                    ShareLink(item: url) { Label("导出 M4A", systemImage: "square.and.arrow.up") }
+                    }
+                    if let url = try? journal.store.audio(id) {
+                        ShareLink(item: url) { Label("导出 M4A", systemImage: "square.and.arrow.up") }
+                    }
+                } else if entry.rawDeletedAt != nil {
+                    Text("日报已保存，原音已按设置清理。会议纪要和地点可继续查看。").foregroundStyle(.secondary)
                 }
                 meetingAnalysis(entry)
                 Button("删除录音", role: .destructive) { confirmingDelete = true }
+                    .disabled(journal.processingDays)
                     .confirmationDialog("删除 iPhone 上的录音？", isPresented: $confirmingDelete) {
                         Button("删除", role: .destructive) {
                             playback.stop()
@@ -156,8 +189,12 @@ private struct PhoneRecording: View {
             }
         }
         .navigationTitle("录音详情")
-        .onReceive(timer) { _ in
-            if playback.playing && !scrubbing { position = playback.position }
+        .task(id: playback.playing) {
+            guard playback.playing else { return }
+            while !Task.isCancelled && playback.playing {
+                if !scrubbing { position = playback.position }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
         }
         .onDisappear { playback.stop() }
     }
@@ -186,8 +223,9 @@ private struct PhoneRecording: View {
                     }
                 }
             }
-            if journal.jobs[id]?.state != .queued {
+            if entry.isPlayable, journal.jobs[id]?.state != .queued {
                 Button(journal.jobs[id] == nil ? "分析录音" : "重新分析") { confirmingAnalysis = true }
+                    .disabled(journal.processingDays)
                     .confirmationDialog("发送到火山方舟进行分析？", isPresented: $confirmingAnalysis) {
                         Button("开始分析") { Task { await journal.analyze(entry) } }
                     } message: {
@@ -211,7 +249,7 @@ private struct JournalSettings: View {
                     ForEach(RecordingStorage.allCases) { Text($0.title).tag($0) }
                 }
             } footer: {
-                Text("自动模式在手表可用空间低于一半时优先存到 iPhone。手表先暂存，iPhone 确认保存后清理手表副本。设置会同步到配对手表，对后续录音生效。")
+                Text("自动模式优先交给 iPhone。手表先离线暂存，iPhone 确认保存后清理手表副本。设置对后续录音生效；每日分析完成后，两端原音都会按清理策略删除。")
             }
             Section("火山方舟") {
                 Picker("API Key 来源", selection: $journal.credential) {
@@ -239,6 +277,32 @@ private struct JournalSettings: View {
             } footer: {
                 Text("使用健康 App 中会议时段的心率汇总，以及手表在录音开始时记录的大概地点。地点可在手表「录音与健康」开启。")
             }
+            Section {
+                Toggle("自动每日分析", isOn: $journal.dailySettings.automatic)
+                Toggle("仅充电时自动分析", isOn: $journal.dailySettings.chargingOnly)
+                Toggle("读取健康与运动数据", isOn: $journal.dailySettings.healthEnabled)
+                    .onChange(of: journal.dailySettings.healthEnabled) {
+                        if journal.dailySettings.healthEnabled { Task { await journal.authorizeDailyHealth() } }
+                    }
+                Toggle("云端备份原始录音", isOn: $journal.dailySettings.cloudBackup)
+                LabeledContent("健康统计时区", value: journal.dailySettings.healthTimeZoneIdentifier ?? TimeZone.current.identifier)
+            } header: {
+                Text("每日分析与存储")
+            } footer: {
+                Text("开启自动分析即允许将结束日期的录音分段发送到火山方舟。日报成功保存后清理两端原音；云备份开启时先备份录音与地点到私人 iCloud，备份失败会保留原音。健康样本仅在本地关联，不上传 iCloud。后台时机由系统安排，打开 App 可补跑。")
+            }
+            .disabled(journal.processingDays)
+            Section {
+                Stepper("高心率：\(Int(journal.dailySettings.thresholds.highBPM)) bpm",
+                        value: $journal.dailySettings.thresholds.highBPM, in: 80...180, step: 5)
+                Stepper("较基线上升：\(Int(journal.dailySettings.thresholds.riseBPM)) bpm",
+                        value: $journal.dailySettings.thresholds.riseBPM, in: 10...60, step: 5)
+            } header: {
+                Text("心率关联阈值")
+            } footer: {
+                Text("按激动说话前 5 分钟至少 3 个非运动样本建立基线。运动期间的重合单独标记。此功能用于回顾，不能诊断疾病或保证捕捉每次心率变化。")
+            }
+            .disabled(journal.processingDays)
         }
         .navigationTitle("设置")
     }
@@ -269,10 +333,12 @@ private struct PhoneHealth: View {
                         Text("读取失败：\(report.unavailableMetrics.map(\.title).joined(separator: "、"))")
                             .foregroundStyle(.secondary)
                     }
-                    Button("删除本机报告", role: .destructive) { confirmingDelete = true }
-                        .confirmationDialog("删除 iPhone 上的报告？", isPresented: $confirmingDelete) {
-                            Button("删除", role: .destructive) { journal.deleteReport() }
-                        }
+                    if !journal.reportIsDaily {
+                        Button("删除本机报告", role: .destructive) { confirmingDelete = true }
+                            .confirmationDialog("删除 iPhone 上的报告？", isPresented: $confirmingDelete) {
+                                Button("删除", role: .destructive) { journal.deleteReport() }
+                            }
+                    }
                 }
                 .toolbar {
                     Menu {
@@ -333,8 +399,9 @@ private struct HealthTrend: View {
                     VStack(alignment: .trailing) {
                         let result = day.metrics[selected]
                         Text(result.map(display) ?? "无数据")
-                        if let count = result?.sampleCount, let min = result?.minimum, let max = result?.maximum {
-                            Text("\(selected.display(min))–\(selected.display(max)) · \(count) 个样本")
+                        if let min = result?.minimum, let max = result?.maximum {
+                            Text("\(selected.display(min))–\(selected.display(max))"
+                                 + (result?.sampleCount.map { " · \($0) 个样本" } ?? ""))
                                 .font(.caption)
                         }
                     }
@@ -343,7 +410,7 @@ private struct HealthTrend: View {
         } header: {
             Text("每日趋势")
         } footer: {
-            Text("步数和活动能量为累计值，其余指标为样本均值。当天数据截至报告生成时。")
+            Text("步数和活动能量为累计值，其余指标为日样本均值，跨日按有数据的日期求均值。当天数据截至手表报告生成时。")
         }
     }
 

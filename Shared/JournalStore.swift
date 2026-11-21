@@ -74,6 +74,7 @@ struct JournalStore {
             throw JournalError.invalidTransfer
         }
         try recordingWrites.withLock {
+            if let previous = try? self.recording(recording.id), previous.rawDeletedAt != nil { return }
             let destination = try folder(recording.id)
             let audioURL = try audio(recording.id)
             if files.fileExists(atPath: audioURL.path) {
@@ -96,11 +97,59 @@ struct JournalStore {
         }
     }
 
-    #if os(iOS)
     func analysisURL(_ id: UUID) throws -> URL {
         try folder(id).appendingPathComponent("meeting-analysis.json")
     }
-    #endif
+
+    private func dailyFolder() throws -> URL {
+        let url = try root().appendingPathComponent("Daily", isDirectory: true)
+        try files.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func dailyURL(_ day: JournalDayKey) throws -> URL {
+        // Encode the full key so time zones containing "/" never create subdirectories.
+        let name = Data(day.id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
+        return try dailyFolder().appendingPathComponent(name).appendingPathExtension("json")
+    }
+
+    func dailyReports() throws -> [DailyJournalReport] {
+        try files.contentsOfDirectory(at: dailyFolder(), includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+            .map { try JSONDecoder().decode(DailyJournalReport.self, from: Data(contentsOf: $0)) }
+            .sorted { $0.day.localDate > $1.day.localDate }
+    }
+
+    func saveDaily(_ report: DailyJournalReport) throws {
+        try JSONEncoder().encode(report).write(to: dailyURL(report.day), options: .atomic)
+    }
+
+    /// Must read the committed report, never trust a transient in-memory result.
+    func purgeDaily(_ day: JournalDayKey) throws -> [UUID] {
+        let report = try JSONDecoder().decode(DailyJournalReport.self, from: Data(contentsOf: dailyURL(day)))
+        guard report.day == day, day.hasEnded(), report.canPurge else { return [] }
+        var ids: [UUID] = []
+        for meeting in report.meetings {
+            try purgeRaw(meeting.id)
+            ids.append(meeting.id)
+        }
+        return ids
+    }
+
+    func purgeRaw(_ id: UUID) throws {
+        try recordingWrites.withLock {
+            guard var entry = try? recording(id) else { return }
+            entry.rawDeletedAt = entry.rawDeletedAt ?? .now
+            // Write the tombstone first; retrying also removes an audio file left by a crash.
+            try save(entry)
+            let url = try audio(id)
+            if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+        }
+    }
+
+    func purgedIDs() throws -> [UUID] {
+        try list().filter { $0.rawDeletedAt != nil }.map(\.id)
+    }
 
     func report() throws -> HealthReport? {
         let url = try root().appendingPathComponent("health.json")

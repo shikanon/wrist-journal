@@ -1,0 +1,11 @@
+{
+  "originalExists": false,
+  "scenario": "daily-cleanup",
+  "meetingCount": 1,
+  "healthDayCount": 7,
+  "minutesPreserved": true,
+  "weeklyMonthlyVerified": true,
+  "passed": true,
+  "damagedDayRetained": true,
+  "eventCount": 1
+}

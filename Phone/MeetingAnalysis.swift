@@ -81,6 +81,7 @@ struct MeetingAnalysisJob: Codable, Sendable {
     var totalChunks = 0
     var minutes: String?
     var error: String?
+    var speechWindows: [SpeechWindow]?
 }
 
 private struct ArkClient {
@@ -158,10 +159,17 @@ actor MeetingAnalyzer {
             let start = durationText(Double(startFrame) / rate)
             let end = durationText(Double(startFrame + frameCount) / rate)
             let text = try await client.complete(
-                prompt: "这是会议时间轴 \(start)–\(end) 的一段。用简体中文提炼议题、关键事实、讨论分歧、决定、待办（负责人和时间如有）及未决问题。保留可核对的数字和关键措辞，约 500 字以内。对于听不清的内容注明不确定。",
+                prompt: """
+                这是会议时间轴 \(start)–\(end) 的一段。仅返回 JSON：
+                {"minutes":"中文纪要，500字以内，包含议题、事实、分歧、决定、待办和不确定项","energeticSpeech":[{"startSeconds":0,"endSeconds":10,"evidence":"可听见的语速加快、音量升高或激烈措辞"}]}
+                时间是相对此分段开始的秒数，范围为 0 到 \(Double(frameCount) / rate)。仅有清晰听觉证据时记录激动说话线索；普通发言、背景声、无声段落返回空数组。不推断说话者身份、心理状态或疾病。
+                """,
                 audio: data
             )
-            job.notes.append("[\(start)–\(end)]\n\(text)")
+            let parsed = try SpeechChunk.parse(text, start: recording.startedAt.addingTimeInterval(Double(startFrame) / rate),
+                                               duration: Double(frameCount) / rate)
+            job.notes.append("[\(start)–\(end)]\n\(parsed.0)")
+            job.speechWindows = (job.speechWindows ?? []) + parsed.1
             try await checkpoint(job)
         }
 

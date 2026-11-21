@@ -86,7 +86,7 @@ struct Export: FileDocument {
         <section><h2>每日数据</h2><div class="scroll"><table>
         <thead><tr><th scope="col">日期</th>\(headers)</tr></thead><tbody>\(rows)</tbody>
         </table></div>
-        <p>心率、静息心率和 SDNN 按可用样本取均值。步数和活动能量按日累计。当天数据截至报告生成时。空白表示无可用数据，可能与权限或采样有关。</p>
+        <p>心率、静息心率和 SDNN 按日读取样本均值，跨日按有数据的日期求均值。步数和活动能量按日累计。当天数据截至手表报告生成时。空白表示无可用数据，可能与权限或采样有关。</p>
         \(status)</section>
         </html>
         """

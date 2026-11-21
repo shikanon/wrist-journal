@@ -9,13 +9,14 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         static let metadata = "recording-metadata"
         static let sync = "sync-recordings"
         static let receipt = "recording-receipt"
+        static let purge = "purge-recordings"
     }
 
     enum Event: Sendable {
         case updated
         case message(String)
         #if os(watchOS)
-        case ready, sync(Set<UUID>), received(UUID)
+        case ready, sync(Set<UUID>, [UUID]), received(UUID), purge([UUID])
         #else
         case ready
         #endif
@@ -58,6 +59,12 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         }
     }
 
+    func cancelTransfer(_ id: UUID) {
+        for transfer in WCSession.default.outstandingFileTransfers where transfer.file.metadata?["id"] as? String == id.uuidString {
+            transfer.cancel()
+        }
+    }
+
     func send(_ recording: Recording) throws -> Bool {
         let session = try activeSession()
         guard recording.isPlayable else { throw JournalError.invalidTransfer }
@@ -77,8 +84,11 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
     private func request(_ info: [String: Any]) {
         switch info[Key.kind] as? String {
         case Key.sync:
+            let purged = (info["purged"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
             let ids = (info["known"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
-            onEvent(.sync(Set(ids)))
+            onEvent(.sync(Set(ids), purged))
+        case Key.purge:
+            onEvent(.purge((info["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:))))
         case Key.receipt:
             if let raw = info["id"] as? String, let id = UUID(uuidString: raw) { onEvent(.received(id)) }
         default: break
@@ -111,9 +121,11 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         try session.updateApplicationContext([RecordingStorage.settingsKey: storage.rawValue])
     }
 
-    func syncRecordings(known: [UUID]) throws -> Bool {
+    func syncRecordings(known: [UUID], purged: [UUID]) throws -> Bool {
         let session = try watchSession()
-        let request: [String: Any] = [Key.kind: Key.sync, "known": known.map(\.uuidString)]
+        try purgeRecordings(purged)
+        let request: [String: Any] = [Key.kind: Key.sync, "known": known.map(\.uuidString),
+                                     "purged": purged.prefix(500).map(\.uuidString)]
         if session.isReachable {
             session.sendMessage(request, replyHandler: { _ in }, errorHandler: { [weak self] _ in
                 guard session.activationState == .activated else {
@@ -126,6 +138,17 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         }
         session.transferUserInfo(request)
         return false
+    }
+
+    func purgeRecordings(_ ids: [UUID]) throws {
+        let session = try watchSession()
+        for offset in stride(from: 0, to: ids.count, by: 200) {
+            let batch = ids[offset..<min(offset + 200, ids.count)].map(\.uuidString)
+            guard !session.outstandingUserInfoTransfers.contains(where: {
+                $0.userInfo[Key.kind] as? String == Key.purge && $0.userInfo["ids"] as? [String] == batch
+            }) else { continue }
+            session.transferUserInfo([Key.kind: Key.purge, "ids": batch])
+        }
     }
     #endif
 
@@ -159,6 +182,9 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
                 guard let data = file.metadata?[Key.metadata] as? Data else { throw JournalError.invalidTransfer }
                 let recording = try JSONDecoder().decode(Recording.self, from: data)
                 try store.receive(file.fileURL, recording: recording)
+                if (try? store.recording(recording.id).rawDeletedAt) != nil, session.activationState == .activated {
+                    session.transferUserInfo([Key.kind: Key.purge, "ids": [recording.id.uuidString]])
+                }
                 if recording.storage == .phone, session.activationState == .activated {
                     session.transferUserInfo([Key.kind: Key.receipt, "id": recording.id.uuidString])
                 }

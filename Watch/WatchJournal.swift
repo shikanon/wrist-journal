@@ -13,7 +13,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published var message: String?
     @Published private(set) var collectLocation = UserDefaults.standard.bool(forKey: "collectMeetingLocation")
 
-    let store = JournalStore()
+    let store: JournalStore
     private let health = HealthReader()
     private var recorder: AVAudioRecorder?
     private var interruptionObserver: NSObjectProtocol?
@@ -24,6 +24,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         return manager
     }()
     private var locating: UUID?
+    private var locationDeadline: Task<Void, Never>?
 
     lazy var transfer = CompanionTransfer(store: store) { [weak self] event in
         Task { @MainActor [weak self] in
@@ -31,14 +32,35 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             switch event {
             case .message(let message): self.message = message
             case .ready: self.queueRecordings()
-            case .sync(let known): self.queueRecordings(known: known)
+            case .sync(let known, let purged):
+                self.purge(purged)
+                self.queueRecordings(known: known)
             case .received(let id): self.confirmPhoneStorage(id)
+            case .purge(let ids):
+                self.purge(ids)
             case .updated: break
             }
         }
     }
 
+    private func purge(_ ids: [UUID]) {
+        for id in ids where current?.id != id {
+            transfer.cancelTransfer(id)
+            try? store.purgeRaw(id)
+        }
+        reload()
+    }
+
     override init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-watch-simulation") {
+            let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalWatchUITests")
+            try? FileManager.default.removeItem(at: root)
+            store = JournalStore(root: root)
+        } else { store = JournalStore() }
+        #else
+        store = JournalStore()
+        #endif
         super.init()
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -52,6 +74,38 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         transfer.activate()
     }
 
+    #if DEBUG
+    func runSimulation() async {
+        let result = URL.applicationSupportDirectory.appendingPathComponent("WristJournalWatchUITests/simulation-result.json")
+        var evidence: [String: Any]
+        do {
+            await start()
+            guard current == nil, !starting, message == JournalError.microphoneDenied.localizedDescription else {
+                finish()
+                throw JournalError.invalidTransfer
+            }
+            let entry = Recording(id: UUID(), startedAt: .now, duration: 60, state: .saved, storage: .watch)
+            try store.save(entry)
+            try Data([1, 2, 3]).write(to: store.audio(entry.id))
+            current = entry
+            await generateReport()
+            guard !generatingReport, message == "请先结束录音，再生成健康报告。" else { throw JournalError.invalidTransfer }
+            current = nil
+            reload()
+            purge([entry.id])
+            guard recordings.isEmpty, try store.recording(entry.id).rawDeletedAt != nil,
+                  !FileManager.default.fileExists(atPath: try store.audio(entry.id).path) else { throw JournalError.invalidTransfer }
+            evidence = ["passed": true, "microphoneDenied": true, "reportBlockedDuringRecording": true,
+                        "watchPurgeVerified": true]
+        } catch {
+            evidence = ["passed": false, "error": error.localizedDescription]
+        }
+        // Ensure a directory exists even when the initial recording permission was denied.
+        try? FileManager.default.createDirectory(at: result.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONSerialization.data(withJSONObject: evidence, options: .prettyPrinted).write(to: result, options: .atomic)
+    }
+    #endif
+
     deinit {
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
     }
@@ -59,10 +113,13 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     private func reload() {
         do {
             let entries = try store.list()
+            for entry in entries where entry.rawDeletedAt != nil {
+                if FileManager.default.fileExists(atPath: try store.audio(entry.id).path) { try store.purgeRaw(entry.id) }
+            }
             recordings = try entries.map { entry in
                 guard entry.state == .recording, current?.id != entry.id else { return entry }
                 return try finalize(entry, interrupted: true)
-            }.filter { $0.state != .recording }
+            }.filter { $0.state != .recording && $0.rawDeletedAt == nil }
             report = try store.report()
         } catch {
             message = error.localizedDescription
@@ -83,6 +140,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             try session.setCategory(.record)
             try session.setActive(true)
             var entry = Recording(id: UUID(), startedAt: .now)
+            entry.timeZoneIdentifier = TimeZone.current.identifier
             entry.storage = transfer.storage.destination(free: space.free, capacity: space.capacity)
             pending = entry
             try store.save(entry)
@@ -116,7 +174,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     func setCollectLocation(_ enabled: Bool) {
         collectLocation = enabled
         UserDefaults.standard.set(enabled, forKey: "collectMeetingLocation")
-        guard enabled else { return }
+        guard enabled else { cancelLocation(); return }
         if locationManager.authorizationStatus == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
         } else if locationManager.authorizationStatus == .denied || locationManager.authorizationStatus == .restricted {
@@ -128,25 +186,39 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         guard locating == nil, collectLocation, [.authorizedWhenInUse, .authorizedAlways].contains(locationManager.authorizationStatus) else { return }
         locating = id
         locationManager.requestLocation()
+        locationDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.cancelLocation()
+        }
+    }
+
+    private func cancelLocation() {
+        locationDeadline?.cancel()
+        locationDeadline = nil
+        locationManager.stopUpdatingLocation()
+        locating = nil
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        defer { locating = nil }
+        defer { cancelLocation() }
         guard collectLocation, var entry = current, entry.id == locating, let location = locations.last,
               (0...1_000).contains(location.horizontalAccuracy),
               abs(location.timestamp.timeIntervalSince(entry.startedAt)) <= 120 else { return }
         let coordinate = location.coordinate
         guard CLLocationCoordinate2DIsValid(coordinate) else { return }
         entry.location = MeetingLocation(latitude: (coordinate.latitude * 1_000).rounded() / 1_000,
-                                         longitude: (coordinate.longitude * 1_000).rounded() / 1_000)
+                                         longitude: (coordinate.longitude * 1_000).rounded() / 1_000,
+                                         accuracy: max(location.horizontalAccuracy, 150), capturedAt: location.timestamp)
         current = entry
         try? store.save(entry)
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { locating = nil }
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { cancelLocation() }
 
     func finish(interrupted: Bool = false) {
         guard let current else { return }
+        cancelLocation()
         let recorder = self.recorder
         self.recorder = nil
         self.current = nil
@@ -255,7 +327,10 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }
 
     func generateReport() async {
-        guard !generatingReport else { return }
+        guard !generatingReport, current == nil, !starting else {
+            message = "请先结束录音，再生成健康报告。"
+            return
+        }
         generatingReport = true
         defer { generatingReport = false }
         do {

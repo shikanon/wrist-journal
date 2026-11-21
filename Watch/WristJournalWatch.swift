@@ -10,6 +10,13 @@ struct WristJournalWatch: App {
     var body: some Scene {
         WindowGroup {
             WatchHome(journal: delegate.journal)
+                .task {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-journal-watch-simulation") {
+                        await delegate.journal.runSimulation()
+                    }
+                    #endif
+                }
                 .onChange(of: phase) {
                     if phase == .active { delegate.journal.checkRecording() }
                 }

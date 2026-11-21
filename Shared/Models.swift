@@ -1,6 +1,6 @@
 import Foundation
 
-struct Recording: Codable, Identifiable {
+struct Recording: Codable, Identifiable, Sendable {
     enum State: String, Codable {
         case recording, saved, interrupted, damaged
     }
@@ -12,8 +12,10 @@ struct Recording: Codable, Identifiable {
     var note = ""
     var storage: RecordingStorage?
     var location: MeetingLocation?
+    var timeZoneIdentifier: String?
+    var rawDeletedAt: Date?
 
-    var isPlayable: Bool { state == .saved || state == .interrupted }
+    var isPlayable: Bool { rawDeletedAt == nil && (state == .saved || state == .interrupted) }
 
     var title: String {
         note.isEmpty ? startedAt.formatted(date: .abbreviated, time: .shortened) : note
@@ -36,17 +38,22 @@ enum RecordingStorage: String, Codable, CaseIterable, Identifiable, Sendable {
 
     func destination(free: Int64?, capacity: Int64?) -> Self {
         guard self == .automatic else { return self }
-        guard let free, let capacity, capacity > 0 else { return .watch }
-        return Double(free) / Double(capacity) < 0.5 ? .phone : .watch
+        return .phone
     }
 }
 
 struct MeetingLocation: Codable, Sendable {
     let latitude: Double
     let longitude: Double
+    var accuracy: Double?
+    var capturedAt: Date?
+
+    var description: String {
+        String(format: "%.3f, %.3f", latitude, longitude)
+    }
 }
 
-enum HealthMetric: String, Codable, CaseIterable, Identifiable {
+enum HealthMetric: String, Codable, CaseIterable, Identifiable, Sendable {
     case heartRate, restingHeartRate, variability, steps, activeEnergy
 
     var id: Self { self }
@@ -77,7 +84,7 @@ enum HealthMetric: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct Measurement: Codable {
+struct Measurement: Codable, Sendable {
     let value: Double
     let minimum: Double?
     let maximum: Double?
@@ -97,9 +104,16 @@ struct Measurement: Codable {
         maximum = highest
         sampleCount = samples.count
     }
+
+    init(value: Double, minimum: Double?, maximum: Double?, sampleCount: Int? = nil) {
+        self.value = value
+        self.minimum = minimum
+        self.maximum = maximum
+        self.sampleCount = sampleCount
+    }
 }
 
-struct HealthDay: Codable, Identifiable {
+struct HealthDay: Codable, Identifiable, Sendable {
     let start: Date
     let localDate: String
     var metrics: [HealthMetric: Measurement] = [:]
@@ -107,7 +121,7 @@ struct HealthDay: Codable, Identifiable {
     var id: Date { start }
 }
 
-struct HealthReport: Codable {
+struct HealthReport: Codable, Sendable {
     let generatedAt: Date
     let timeZone: String
     let days: [HealthDay]
@@ -121,9 +135,9 @@ struct HealthReport: Codable {
             return values.reduce(0) { $0 + $1.value }
         }
 
-        let count = values.reduce(0) { $0 + ($1.sampleCount ?? 0) }
+        let count = values.reduce(0) { $0 + ($1.sampleCount ?? 1) }
         guard count > 0 else { return nil }
-        return values.reduce(0) { $0 + $1.value * Double($1.sampleCount ?? 0) } / Double(count)
+        return values.reduce(0) { $0 + $1.value * Double($1.sampleCount ?? 1) } / Double(count)
     }
 }
 
