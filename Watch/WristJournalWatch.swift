@@ -1,79 +1,146 @@
 import SwiftUI
+import WatchConnectivity
+import WatchKit
 
 @main
 struct WristJournalWatch: App {
-    @StateObject private var journal = WatchJournal()
+    @WKApplicationDelegateAdaptor(WatchApplicationDelegate.self) private var delegate
     @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
-            WatchHome(journal: journal)
+            WatchHome(journal: delegate.journal)
                 .onChange(of: phase) {
-                    if phase == .active { journal.checkRecording() }
+                    if phase == .active { delegate.journal.checkRecording() }
                 }
         }
     }
 }
 
+@MainActor
+private final class WatchApplicationDelegate: NSObject, WKApplicationDelegate {
+    let journal = WatchJournal()
+    private var tasks: [WKWatchConnectivityRefreshBackgroundTask] = []
+    private var observations: [NSKeyValueObservation] = []
+
+    func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
+        for task in backgroundTasks {
+            if let task = task as? WKWatchConnectivityRefreshBackgroundTask {
+                tasks.append(task)
+            } else {
+                task.setTaskCompletedWithSnapshot(false)
+            }
+        }
+        guard !tasks.isEmpty else { return }
+        let session = WCSession.default
+        if observations.isEmpty {
+            observations = [session.observe(\.activationState) { [weak self] _, _ in
+                Task { @MainActor in self?.completeConnectivityTasks() }
+            }, session.observe(\.hasContentPending) { [weak self] _, _ in
+                Task { @MainActor in self?.completeConnectivityTasks() }
+            }]
+        }
+        Task { @MainActor in completeConnectivityTasks() }
+    }
+
+    private func completeConnectivityTasks() {
+        guard WCSession.default.activationState == .activated, !WCSession.default.hasContentPending else { return }
+        for task in tasks { task.setTaskCompletedWithSnapshot(false) }
+        tasks.removeAll()
+        observations.removeAll()
+    }
+}
+
 private struct WatchHome: View {
     @ObservedObject var journal: WatchJournal
+    @Environment(\.scenePhase) private var phase
+    @State private var crownTurn = 0.0
+    @FocusState private var crownFocused: Bool
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    if let entry = journal.current {
-                        VStack(spacing: 2) {
-                            Label("录音中", systemImage: "record.circle.fill")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.red)
-                            Text(entry.startedAt, style: .timer)
-                                .font(.system(.title2, design: .monospaced).weight(.semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        Button(role: .destructive) { journal.finish() } label: {
-                            Label("停止并保存", systemImage: "stop.fill")
-                        }
-                        .tint(.red)
-                    } else {
-                        Button {
-                            Task { await journal.start() }
-                        } label: {
-                            Label(journal.starting ? "正在准备…" : "开始录音", systemImage: "mic.fill")
-                                .font(.headline)
-                        }
-                        .tint(.red)
-                        .disabled(journal.starting)
+            VStack(spacing: 6) {
+                if let entry = journal.current {
+                    Label("录音中", systemImage: "record.circle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(entry.startedAt, style: .timer)
+                        .font(.title2.monospacedDigit())
+                    Button(role: .destructive) { journal.finish() } label: {
+                        Label("停止并保存", systemImage: "stop.fill")
                     }
-                }
-                Section("健康") {
+                    .tint(.red)
+                } else {
+                    Button { startRecording() } label: {
+                        Label(journal.starting ? "正在准备…" : "开始录音", systemImage: "mic.fill")
+                            .font(.headline)
+                    }
+                    .tint(.red)
+                    .disabled(journal.starting)
+                    .focusable()
+                    .focused($crownFocused)
+                    .digitalCrownRotation($crownTurn, from: -1, through: 1, by: 1,
+                                          sensitivity: .medium, isContinuous: false, isHapticFeedbackEnabled: false)
+                    .onChange(of: crownTurn) {
+                        guard crownTurn != 0 else { return }
+                        crownTurn = 0
+                        if phase == .active { startRecording() }
+                    }
+                    .onAppear { crownFocused = true }
+                    Text("也可转动数码表冠")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     NavigationLink {
-                        WatchHealth(journal: journal)
+                        WatchLibrary(journal: journal)
                     } label: {
-                        Label("健康报告", systemImage: "heart.text.clipboard")
+                        Label("录音与健康", systemImage: "folder")
                     }
                 }
-                Section("录音") {
-                    if journal.recordings.isEmpty {
-                        Text("暂无录音").foregroundStyle(.secondary)
-                    }
-                    ForEach(journal.recordings) { entry in
-                        NavigationLink {
-                            WatchRecording(journal: journal, id: entry.id, note: entry.note)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.title).lineLimit(1)
-                                Text(entry.isPlayable ? durationText(entry.duration) : "文件无法播放")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+            .navigationTitle("手记")
+            .modifier(JournalNotice(message: $journal.message))
+        }
+    }
+
+    private func startRecording() { Task { await journal.start() } }
+}
+
+private struct WatchLibrary: View {
+    @ObservedObject var journal: WatchJournal
+
+    var body: some View {
+        List {
+            Section("健康") {
+                NavigationLink {
+                    WatchHealth(journal: journal)
+                } label: {
+                    Label("健康报告", systemImage: "heart.text.clipboard")
+                }
+            }
+            Section("录音") {
+                if journal.recordings.isEmpty {
+                    Text("暂无录音").foregroundStyle(.secondary)
+                }
+                ForEach(journal.recordings) { entry in
+                    NavigationLink {
+                        WatchRecording(journal: journal, id: entry.id, note: entry.note)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title).lineLimit(1)
+                            Text(entry.isPlayable ? durationText(entry.duration) : "文件无法播放")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if entry.isPlayable, entry.storage == .phone {
+                                Text("等待 iPhone 保存").font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("手记")
-            .modifier(JournalNotice(message: $journal.message))
+            Toggle("记录会议地点", isOn: Binding(get: { journal.collectLocation }, set: journal.setCollectLocation))
         }
+        .navigationTitle("录音与健康")
     }
 }
 

@@ -1,23 +1,40 @@
 import AVFoundation
+import CoreLocation
 import SwiftUI
+import WatchKit
 
 @MainActor
-final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate {
+final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @preconcurrency CLLocationManagerDelegate {
     @Published private(set) var current: Recording?
     @Published private(set) var recordings: [Recording] = []
     @Published private(set) var report: HealthReport?
     @Published private(set) var starting = false
     @Published private(set) var generatingReport = false
     @Published var message: String?
+    @Published private(set) var collectLocation = UserDefaults.standard.bool(forKey: "collectMeetingLocation")
 
     let store = JournalStore()
     private let health = HealthReader()
     private var recorder: AVAudioRecorder?
     private var interruptionObserver: NSObjectProtocol?
+    private lazy var locationManager: CLLocationManager = {
+        let manager = CLLocationManager()
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        manager.delegate = self
+        return manager
+    }()
+    private var locating: UUID?
 
     lazy var transfer = CompanionTransfer(store: store) { [weak self] event in
-        if case let .message(message) = event {
-            Task { @MainActor [weak self] in self?.message = message }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            switch event {
+            case .message(let message): self.message = message
+            case .ready: self.queueRecordings()
+            case .sync(let known): self.queueRecordings(known: known)
+            case .received(let id): self.confirmPhoneStorage(id)
+            case .updated: break
+            }
         }
     }
 
@@ -61,22 +78,28 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate {
         var pending: Recording?
         do {
             guard await AVAudioApplication.requestRecordPermission() else { throw JournalError.microphoneDenied }
+            let space = try store.availableStorage()
+            if let free = space.free, free < 16 * 1024 * 1024 { throw JournalError.storageFull }
             try session.setCategory(.record)
             try session.setActive(true)
-            let entry = Recording(id: UUID(), startedAt: .now)
+            var entry = Recording(id: UUID(), startedAt: .now)
+            entry.storage = transfer.storage.destination(free: space.free, capacity: space.capacity)
             pending = entry
             try store.save(entry)
 
             let recorder = try AVAudioRecorder(url: store.audio(entry.id), settings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 24_000,
+                AVSampleRateKey: 16_000,
                 AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 48_000
+                AVEncoderBitRateKey: 32_000
             ])
+            recorder.isMeteringEnabled = false
             recorder.delegate = self
             guard recorder.record() else { throw JournalError.recordingFailed }
             self.recorder = recorder
             current = entry
+            WKInterfaceDevice.current().play(.start)
+            requestLocation(for: entry.id)
         } catch {
             if let pending { try? store.delete(pending.id) }
             try? session.setActive(false)
@@ -90,12 +113,45 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate {
         }
     }
 
+    func setCollectLocation(_ enabled: Bool) {
+        collectLocation = enabled
+        UserDefaults.standard.set(enabled, forKey: "collectMeetingLocation")
+        guard enabled else { return }
+        if locationManager.authorizationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+        } else if locationManager.authorizationStatus == .denied || locationManager.authorizationStatus == .restricted {
+            message = "请在手表的定位设置中允许手记使用位置。"
+        }
+    }
+
+    private func requestLocation(for id: UUID) {
+        guard locating == nil, collectLocation, [.authorizedWhenInUse, .authorizedAlways].contains(locationManager.authorizationStatus) else { return }
+        locating = id
+        locationManager.requestLocation()
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        defer { locating = nil }
+        guard collectLocation, var entry = current, entry.id == locating, let location = locations.last,
+              (0...1_000).contains(location.horizontalAccuracy),
+              abs(location.timestamp.timeIntervalSince(entry.startedAt)) <= 120 else { return }
+        let coordinate = location.coordinate
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+        entry.location = MeetingLocation(latitude: (coordinate.latitude * 1_000).rounded() / 1_000,
+                                         longitude: (coordinate.longitude * 1_000).rounded() / 1_000)
+        current = entry
+        try? store.save(entry)
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { locating = nil }
+
     func finish(interrupted: Bool = false) {
         guard let current else { return }
         let recorder = self.recorder
         self.recorder = nil
         self.current = nil
         recorder?.stop()
+        WKInterfaceDevice.current().play(.stop)
         try? AVAudioSession.sharedInstance().setActive(false)
 
         do {
@@ -106,6 +162,27 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate {
             } else if interrupted {
                 message = "音频会话被系统中断，已保存可播放的部分。"
             }
+            if saved.isPlayable, saved.storage == .phone { queueRecordings() }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func queueRecordings(known: Set<UUID>? = nil) {
+        for entry in recordings where entry.isPlayable {
+            if known?.contains(entry.id) == true {
+                if entry.storage == .phone { confirmPhoneStorage(entry.id) }
+                continue
+            }
+            if known != nil || entry.storage == .phone { _ = try? transfer.send(entry) }
+        }
+    }
+
+    private func confirmPhoneStorage(_ id: UUID) {
+        guard let entry = recordings.first(where: { $0.id == id }), entry.storage == .phone else { return }
+        do {
+            try store.delete(id)
+            reload()
         } catch {
             message = error.localizedDescription
         }
@@ -114,8 +191,9 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate {
     private func finalize(_ entry: Recording, interrupted: Bool) throws -> Recording {
         var entry = entry
         let url = try store.audio(entry.id)
-        if let audio = try? AVAudioPlayer(contentsOf: url), audio.duration.isFinite, audio.duration > 0 {
-            entry.duration = audio.duration
+        if let audio = try? AVAudioFile(forReading: url), audio.length > 0,
+           audio.processingFormat.sampleRate.isFinite, audio.processingFormat.sampleRate > 0 {
+            entry.duration = Double(audio.length) / audio.processingFormat.sampleRate
             entry.state = interrupted ? .interrupted : .saved
         } else {
             entry.state = .damaged

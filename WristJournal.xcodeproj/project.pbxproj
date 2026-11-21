@@ -6,6 +6,189 @@
 	};
 	objectVersion = 56;
 	objects = {
+		BB721ABFE0FA4D608BEC34D3 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = PhoneUITests.swift;
+			sourceTree = "<group>";
+		};
+		6964349196DE45DE9A4A953A = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.cfbundle;
+			path = PhoneUITests.xctest;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		6FA361AF99C44AA399A2232C = {
+			isa = PBXBuildFile;
+			fileRef = BB721ABFE0FA4D608BEC34D3;
+		};
+		3950291588EA458D9174FB81 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (6FA361AF99C44AA399A2232C,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C40FCEB224FA4C03A5F21037 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4E708019C2AA507CA0CBF6FD;
+			proxyType = 1;
+			remoteGlobalIDString = EFDA866860395C7E93B16697;
+			remoteInfo = WristJournal;
+		};
+		5EB6D321F0A84420A94FF82D = {
+			isa = PBXTargetDependency;
+			target = EFDA866860395C7E93B16697;
+			targetProxy = C40FCEB224FA4C03A5F21037;
+		};
+		8B159696BC4B469494C82B23 = {
+			isa = PBXNativeTarget;
+			name = PhoneUITests;
+			productName = PhoneUITests;
+			buildConfigurationList = AABD1F0670D7455F8A18A0E7;
+			buildPhases = (3950291588EA458D9174FB81,);
+			buildRules = ();
+			dependencies = (5EB6D321F0A84420A94FF82D,);
+			productReference = 6964349196DE45DE9A4A953A;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		AABD1F0670D7455F8A18A0E7 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (222BCFC79D2641E6BA73D5C4, 92D1DA475E8047CEA49F61DD,);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		222BCFC79D2641E6BA73D5C4 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal.PhoneUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = WristJournal;
+			};
+			name = Debug;
+		};
+		92D1DA475E8047CEA49F61DD = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal.PhoneUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = WristJournal;
+			};
+			name = Release;
+		};
+		B8AEECA990F841FEAF65B0EF = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WatchUITests.swift;
+			sourceTree = "<group>";
+		};
+		FB4E214AF40941DE8AB217C6 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.cfbundle;
+			path = WatchUITests.xctest;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		BFA8543DEDE04049BE1DD3E0 = {
+			isa = PBXBuildFile;
+			fileRef = B8AEECA990F841FEAF65B0EF;
+		};
+		268390BC30D044899ECB1974 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (BFA8543DEDE04049BE1DD3E0,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2C4D1539375144C48D1D3F30 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4E708019C2AA507CA0CBF6FD;
+			proxyType = 1;
+			remoteGlobalIDString = 9736554047A55D9D8EF556E0;
+			remoteInfo = WristJournalWatch;
+		};
+		983C3D2C05A4466F98207020 = {
+			isa = PBXTargetDependency;
+			target = 9736554047A55D9D8EF556E0;
+			targetProxy = 2C4D1539375144C48D1D3F30;
+		};
+		1D8C2843A428499BAC24A461 = {
+			isa = PBXNativeTarget;
+			name = WatchUITests;
+			productName = WatchUITests;
+			buildConfigurationList = E2B560074A7247CA978A1548;
+			buildPhases = (268390BC30D044899ECB1974,);
+			buildRules = ();
+			dependencies = (983C3D2C05A4466F98207020,);
+			productReference = FB4E214AF40941DE8AB217C6;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		E2B560074A7247CA978A1548 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (CC02DFDEA4D84EC4BB8EC02B, E8B15A9BAAFB4A55BB3CF904,);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CC02DFDEA4D84EC4BB8EC02B = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal.WatchUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = WristJournalWatch;
+			};
+			name = Debug;
+		};
+		E8B15A9BAAFB4A55BB3CF904 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.shikanon.wristjournal.WatchUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = WristJournalWatch;
+			};
+			name = Release;
+		};
+		5F557025F99A4B9EADCEB777 = {
+			isa = PBXGroup;
+			path = Tests;
+			sourceTree = "<group>";
+			children = (
+				BB721ABFE0FA4D608BEC34D3,
+				B8AEECA990F841FEAF65B0EF,
+			);
+		};
+		DF7DDCE22CF3481B852B68AE = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = MeetingAnalysis.swift;
+			sourceTree = "<group>";
+		};
+		F2905CBB3DAC4BF07452CA9D = {
+			isa = PBXBuildFile;
+			fileRef = DF7DDCE22CF3481B852B68AE;
+		};
+		BEE992873A164E09BCACCCB1 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = WristJournal.entitlements;
+			sourceTree = "<group>";
+		};
 		AB97FA3174CA598F8FCBC7D1 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -81,6 +264,8 @@
 				E2C912A5B09B533C9B47E76E,
 				4D0D9A704AF45790A2748199,
 				2C0BF1CC7F755CF3AC1C8286,
+				DF7DDCE22CF3481B852B68AE,
+				BEE992873A164E09BCACCCB1,
 			);
 		};
 		DE50420CAAA2504EB9460349 = {
@@ -203,10 +388,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "手记";
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Watch/WristJournal.entitlements;
 				INFOPLIST_FILE = Watch/Info.plist;
@@ -225,10 +410,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "手记";
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Watch/WristJournal.entitlements;
 				INFOPLIST_FILE = Watch/Info.plist;
@@ -352,6 +537,7 @@
 				B01F8CC08848547EA27F12BB,
 				1544ADA4A5995C759CD83F4A,
 				8192EB1BC0DB51B18BBBCDF7,
+				F2905CBB3DAC4BF07452CA9D,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -372,11 +558,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "手记";
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				CODE_SIGN_ENTITLEMENTS = Phone/WristJournal.entitlements;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "你选择分析会议背景时，读取录制时段的心率并生成汇总。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -392,11 +580,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "手记";
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				CODE_SIGN_ENTITLEMENTS = Phone/WristJournal.entitlements;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "你选择分析会议背景时，读取录制时段的心率并生成汇总。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -438,6 +628,8 @@
 		6606FF85B456507A8AD02744 = {
 			isa = PBXGroup;
 			children = (
+				6964349196DE45DE9A4A953A,
+				FB4E214AF40941DE8AB217C6,
 				2FE058DA225D5C45B34955E0,
 				8717C7FD36EA5C30BB524799,
 			);
@@ -447,6 +639,7 @@
 		50CFC6CF2D555C6CA15AFF18 = {
 			isa = PBXGroup;
 			children = (
+				5F557025F99A4B9EADCEB777,
 				32944B30EF9159D88124B617,
 				6612A45DB7705EC08D089494,
 				C29179A68DD854769954E79F,
@@ -461,6 +654,7 @@
 				SWIFT_VERSION = 5.0;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				ENABLE_TESTABILITY = YES;
 			};
 			name = Debug;
@@ -489,6 +683,13 @@
 			attributes = {
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					EFDA866860395C7E93B16697 = {
+						SystemCapabilities = {
+							com.apple.HealthKit = {
+								enabled = 1;
+							};
+						};
+					};
 					9736554047A55D9D8EF556E0 = {
 						SystemCapabilities = {
 							com.apple.HealthKit = {
@@ -514,6 +715,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				8B159696BC4B469494C82B23,
+				1D8C2843A428499BAC24A461,
 				EFDA866860395C7E93B16697,
 				9736554047A55D9D8EF556E0,
 			);

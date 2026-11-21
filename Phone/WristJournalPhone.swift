@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 @main
 struct WristJournalPhone: App {
     @StateObject private var journal: PhoneJournal
+    @Environment(\.scenePhase) private var phase
 
     init() {
         let journal = PhoneJournal()
@@ -19,9 +20,15 @@ struct WristJournalPhone: App {
                     .tabItem { Label("录音", systemImage: "waveform") }
                 NavigationStack { PhoneHealth(journal: journal) }
                     .tabItem { Label("健康", systemImage: "heart.text.clipboard") }
+                NavigationStack { JournalSettings(journal: journal) }
+                    .tabItem { Label("设置", systemImage: "gearshape") }
             }
             .tint(.teal)
             .modifier(JournalNotice(message: $journal.message))
+            .task { journal.resumeAnalysis() }
+            .onChange(of: phase) {
+                if phase == .active { journal.resumeAnalysis() }
+            }
         }
     }
 }
@@ -33,13 +40,19 @@ private struct PhoneRecordings: View {
     var body: some View {
         Group {
             if journal.recordings.isEmpty {
-                ContentUnavailableView("暂无录音", systemImage: "waveform",
-                                       description: Text("在 Apple Watch 的录音详情中选择「发送到 iPhone」。"))
+                ContentUnavailableView {
+                    Label("暂无录音", systemImage: "waveform")
+                } description: {
+                    Text(journal.syncStatus ?? "在手表结束录音后，点这里从手表同步。")
+                } actions: {
+                    Button("同步手表录音") { journal.syncRecordings() }
+                }
             } else {
                 List {
                     Section("已导入") {
                         LabeledContent("录音段数", value: journal.recordings.count.formatted())
                         LabeledContent("总时长", value: durationText(journal.recordings.reduce(0) { $0 + $1.duration }))
+                        if let status = journal.syncStatus { Text(status).font(.footnote).foregroundStyle(.secondary) }
                     }
                     Section("录音") {
                         ForEach(journal.recordings) { entry in
@@ -51,16 +64,23 @@ private struct PhoneRecordings: View {
                                     Text(durationText(entry.duration))
                                         .font(.subheadline.monospacedDigit())
                                         .foregroundStyle(.secondary)
+                                    if let job = journal.jobs[entry.id], job.state == .complete {
+                                        Text("会议纪要已生成").font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                .refreshable { journal.syncRecordings() }
             }
         }
         .navigationTitle("录音")
         .toolbar {
             if !journal.recordings.isEmpty {
+                Button { journal.syncRecordings() } label: {
+                    Label("同步手表录音", systemImage: "arrow.triangle.2.circlepath")
+                }
                 Button { exporting = true } label: {
                     Label("导出录音索引", systemImage: "square.and.arrow.up")
                 }
@@ -81,6 +101,7 @@ private struct PhoneRecording: View {
     @State private var position: TimeInterval = 0
     @State private var scrubbing = false
     @State private var confirmingDelete = false
+    @State private var confirmingAnalysis = false
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -124,6 +145,7 @@ private struct PhoneRecording: View {
                 if let url = try? journal.store.audio(id) {
                     ShareLink(item: url) { Label("导出 M4A", systemImage: "square.and.arrow.up") }
                 }
+                meetingAnalysis(entry)
                 Button("删除录音", role: .destructive) { confirmingDelete = true }
                     .confirmationDialog("删除 iPhone 上的录音？", isPresented: $confirmingDelete) {
                         Button("删除", role: .destructive) {
@@ -138,6 +160,87 @@ private struct PhoneRecording: View {
             if playback.playing && !scrubbing { position = playback.position }
         }
         .onDisappear { playback.stop() }
+    }
+
+    private func meetingAnalysis(_ entry: Recording) -> some View {
+        Section("会议分析") {
+            if let job = journal.jobs[id] {
+                switch job.state {
+                case .queued:
+                    if journal.analyzing == id {
+                        if job.totalChunks > 0, job.notes.count < job.totalChunks {
+                            ProgressView("正在分析第 \(job.notes.count + 1) / \(job.totalChunks) 段",
+                                         value: Double(job.notes.count), total: Double(job.totalChunks))
+                        } else {
+                            ProgressView(job.totalChunks == 0 ? "正在准备录音" : "正在整理会议纪要")
+                        }
+                    } else {
+                        Text("等待分析").foregroundStyle(.secondary)
+                    }
+                case .failed:
+                    Text(job.error ?? "分析失败").foregroundStyle(.secondary)
+                case .complete:
+                    if let minutes = job.minutes {
+                        Text(minutes).textSelection(.enabled)
+                        ShareLink(item: minutes) { Label("分享会议纪要", systemImage: "square.and.arrow.up") }
+                    }
+                }
+            }
+            if journal.jobs[id]?.state != .queued {
+                Button(journal.jobs[id] == nil ? "分析录音" : "重新分析") { confirmingAnalysis = true }
+                    .confirmationDialog("发送到火山方舟进行分析？", isPresented: $confirmingAnalysis) {
+                        Button("开始分析") { Task { await journal.analyze(entry) } }
+                    } message: {
+                        Text(journal.includeContext
+                             ? "将分段上传这条录音，并使用可用的会议时段心率汇总和粗略地点。"
+                             : "将分段上传这条录音。会议纪要会保存在此 iPhone。")
+                    }
+            }
+        }
+    }
+}
+
+private struct JournalSettings: View {
+    @ObservedObject var journal: PhoneJournal
+    @State private var key = ""
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("录音存储", selection: $journal.storage) {
+                    ForEach(RecordingStorage.allCases) { Text($0.title).tag($0) }
+                }
+            } footer: {
+                Text("自动模式在手表可用空间低于一半时优先存到 iPhone。手表先暂存，iPhone 确认保存后清理手表副本。设置会同步到配对手表，对后续录音生效。")
+            }
+            Section("火山方舟") {
+                Picker("API Key 来源", selection: $journal.credential) {
+                    ForEach(ArkCredential.allCases) { Text($0.title).tag($0) }
+                }
+                if journal.credential == .official {
+                    LabeledContent("官方 Key", value: journal.hasOfficialKey ? "已配置" : "未配置")
+                }
+                SecureField("输入个人 API Key", text: $key)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("保存个人 Key") {
+                    if journal.savePersonalKey(key) { key = "" }
+                }
+                .disabled(key.isEmpty)
+                if journal.hasPersonalKey {
+                    Button("移除个人 Key", role: .destructive) { journal.removePersonalKey() }
+                }
+                TextField("模型 ID 或接入点 ID", text: $journal.model)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            Section {
+                Toggle("分析时使用会议背景", isOn: $journal.includeContext)
+            } footer: {
+                Text("使用健康 App 中会议时段的心率汇总，以及手表在录音开始时记录的大概地点。地点可在手表「录音与健康」开启。")
+            }
+        }
+        .navigationTitle("设置")
     }
 }
 

@@ -10,12 +10,40 @@ struct Recording: Codable, Identifiable {
     var duration: TimeInterval = 0
     var state: State = .recording
     var note = ""
+    var storage: RecordingStorage?
+    var location: MeetingLocation?
 
     var isPlayable: Bool { state == .saved || state == .interrupted }
 
     var title: String {
         note.isEmpty ? startedAt.formatted(date: .abbreviated, time: .shortened) : note
     }
+}
+
+enum RecordingStorage: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic, watch, phone
+
+    static let settingsKey = "recordingStorage"
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .automatic: "自动"
+        case .watch: "保留在手表"
+        case .phone: "优先存到 iPhone"
+        }
+    }
+
+    func destination(free: Int64?, capacity: Int64?) -> Self {
+        guard self == .automatic else { return self }
+        guard let free, let capacity, capacity > 0 else { return .watch }
+        return Double(free) / Double(capacity) < 0.5 ? .phone : .watch
+    }
+}
+
+struct MeetingLocation: Codable, Sendable {
+    let latitude: Double
+    let longitude: Double
 }
 
 enum HealthMetric: String, Codable, CaseIterable, Identifiable {
@@ -101,7 +129,7 @@ struct HealthReport: Codable {
 
 enum JournalError: LocalizedError {
     case microphoneDenied, recordingFailed, playbackFailed, healthUnavailable
-    case phoneUnavailable, invalidTransfer
+    case phoneUnavailable, watchUnavailable, invalidTransfer, storageFull
 
     var errorDescription: String? {
         switch self {
@@ -110,7 +138,9 @@ enum JournalError: LocalizedError {
         case .playbackFailed: "无法开始播放这段录音。"
         case .healthUnavailable: "此设备无法读取健康数据。"
         case .phoneUnavailable: "请确认配对 iPhone 已安装并打开手记，然后重试。"
+        case .watchUnavailable: "正在等待手表连接。请确认手表已安装手记，并保持两台设备在附近。"
         case .invalidTransfer: "收到的文件不完整或无法识别。"
+        case .storageFull: "手表可用空间不足以安全录音。请先同步已有录音，或清理手表空间。"
         }
     }
 }

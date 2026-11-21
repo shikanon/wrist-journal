@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>录制你主动开始的手记，音频保存在手表上。</string>
+    <string>录制你主动开始的会议或手记。录音先保存在手表，可以同步到配对的 iPhone。</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>开启会议地点后，在开始录音时获取一次大概位置。你可以选择是否将地点用于会议分析。</string>
     <key>NSHealthShareUsageDescription</key>
     <string>在手表上读取心率、静息心率、心率变异性、步数与活动能量，生成离线健康报告。</string>
     <key>WKApplication</key>

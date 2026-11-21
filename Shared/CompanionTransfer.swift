@@ -7,11 +7,18 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         static let recording = "recording"
         static let report = "health-report"
         static let metadata = "recording-metadata"
+        static let sync = "sync-recordings"
+        static let receipt = "recording-receipt"
     }
 
     enum Event: Sendable {
         case updated
         case message(String)
+        #if os(watchOS)
+        case ready, sync(Set<UUID>), received(UUID)
+        #else
+        case ready
+        #endif
     }
 
     private let store: JournalStore
@@ -30,6 +37,12 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
     }
 
     #if os(watchOS)
+    var storage: RecordingStorage {
+        let raw = WCSession.isSupported()
+            ? WCSession.default.receivedApplicationContext[RecordingStorage.settingsKey] as? String : nil
+        return raw.flatMap(RecordingStorage.init(rawValue:)) ?? .automatic
+    }
+
     private func activeSession() throws -> WCSession {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
               WCSession.default.isCompanionAppInstalled else {
@@ -60,6 +73,60 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         let session = try activeSession()
         session.transferFile(try store.outgoingReport(report), metadata: [Key.kind: Key.report])
     }
+
+    private func request(_ info: [String: Any]) {
+        switch info[Key.kind] as? String {
+        case Key.sync:
+            let ids = (info["known"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
+            onEvent(.sync(Set(ids)))
+        case Key.receipt:
+            if let raw = info["id"] as? String, let id = UUID(uuidString: raw) { onEvent(.received(id)) }
+        default: break
+        }
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) { request(userInfo) }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any],
+                 replyHandler: @escaping ([String: Any]) -> Void) {
+        request(message)
+        replyHandler(["accepted": true])
+    }
+
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        if session.isReachable { onEvent(.ready) }
+    }
+    #else
+    private func watchSession() throws -> WCSession {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isPaired, WCSession.default.isWatchAppInstalled else {
+            throw JournalError.watchUnavailable
+        }
+        return .default
+    }
+
+    func publishStorage(_ storage: RecordingStorage) throws {
+        let session = try watchSession()
+        guard session.applicationContext[RecordingStorage.settingsKey] as? String != storage.rawValue else { return }
+        try session.updateApplicationContext([RecordingStorage.settingsKey: storage.rawValue])
+    }
+
+    func syncRecordings(known: [UUID]) throws -> Bool {
+        let session = try watchSession()
+        let request: [String: Any] = [Key.kind: Key.sync, "known": known.map(\.uuidString)]
+        if session.isReachable {
+            session.sendMessage(request, replyHandler: { _ in }, errorHandler: { [weak self] _ in
+                guard session.activationState == .activated else {
+                    self?.onEvent(.message(JournalError.watchUnavailable.localizedDescription))
+                    return
+                }
+                session.transferUserInfo(request)
+            })
+            return true
+        }
+        session.transferUserInfo(request)
+        return false
+    }
     #endif
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState,
@@ -68,6 +135,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
             onEvent(.message("设备连接：\(error.localizedDescription)"))
             return
         }
+        if activationState == .activated { onEvent(.ready) }
         #if os(watchOS)
         if activationState == .activated {
             DispatchQueue.main.async { [self] in
@@ -79,6 +147,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
     }
 
     #if os(iOS)
+    func sessionWatchStateDidChange(_ session: WCSession) { onEvent(.ready) }
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
 
@@ -90,6 +159,9 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
                 guard let data = file.metadata?[Key.metadata] as? Data else { throw JournalError.invalidTransfer }
                 let recording = try JSONDecoder().decode(Recording.self, from: data)
                 try store.receive(file.fileURL, recording: recording)
+                if recording.storage == .phone, session.activationState == .activated {
+                    session.transferUserInfo([Key.kind: Key.receipt, "id": recording.id.uuidString])
+                }
             case Key.report:
                 let report = try JSONDecoder().decode(HealthReport.self, from: Data(contentsOf: file.fileURL))
                 if let previous = try? store.report(), previous.generatedAt >= report.generatedAt { return }

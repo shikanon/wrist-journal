@@ -32,6 +32,16 @@ struct JournalStore {
         try folder(id).appendingPathComponent("WristJournal-\(id.uuidString).m4a")
     }
 
+    func availableStorage() throws -> (free: Int64?, capacity: Int64?) {
+        let space = try files.attributesOfFileSystem(forPath: root().path)
+        return ((space[.systemFreeSize] as? NSNumber)?.int64Value,
+                (space[.systemSize] as? NSNumber)?.int64Value)
+    }
+
+    func recording(_ id: UUID) throws -> Recording {
+        try JSONDecoder().decode(Recording.self, from: Data(contentsOf: folder(id).appendingPathComponent("recording.json")))
+    }
+
     func list() throws -> [Recording] {
         let children = try files.contentsOfDirectory(at: root(), includingPropertiesForKeys: nil,
                                                      options: .skipsHiddenFiles)
@@ -63,21 +73,34 @@ struct JournalStore {
               let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
             throw JournalError.invalidTransfer
         }
-        let destination = try folder(recording.id)
-        if try recordingWrites.withLock({
-            guard files.fileExists(atPath: destination.path) else { return false }
-            try save(recording)
-            return true
-        }) { return }
+        try recordingWrites.withLock {
+            let destination = try folder(recording.id)
+            let audioURL = try audio(recording.id)
+            if files.fileExists(atPath: audioURL.path) {
+                try save(recording)
+                return
+            }
 
-        let staging = try root().appendingPathComponent(".incoming-\(UUID().uuidString)")
-        try files.createDirectory(at: staging, withIntermediateDirectories: false)
-        defer { try? files.removeItem(at: staging) }
-        let audioName = try audio(recording.id).lastPathComponent
-        try files.copyItem(at: source, to: staging.appendingPathComponent(audioName))
-        try JSONEncoder().encode(recording).write(to: staging.appendingPathComponent("recording.json"))
-        try files.moveItem(at: staging, to: destination)
+            let staging = try root().appendingPathComponent(".incoming-\(UUID().uuidString)")
+            try files.createDirectory(at: staging, withIntermediateDirectories: false)
+            defer { try? files.removeItem(at: staging) }
+            let stagedAudio = staging.appendingPathComponent(audioURL.lastPathComponent)
+            try files.copyItem(at: source, to: stagedAudio)
+            if files.fileExists(atPath: destination.path) {
+                try files.moveItem(at: stagedAudio, to: audioURL)
+                try save(recording)
+            } else {
+                try JSONEncoder().encode(recording).write(to: staging.appendingPathComponent("recording.json"))
+                try files.moveItem(at: staging, to: destination)
+            }
+        }
     }
+
+    #if os(iOS)
+    func analysisURL(_ id: UUID) throws -> URL {
+        try folder(id).appendingPathComponent("meeting-analysis.json")
+    }
+    #endif
 
     func report() throws -> HealthReport? {
         let url = try root().appendingPathComponent("health.json")
