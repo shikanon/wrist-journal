@@ -14,16 +14,18 @@ def main():
     parser.add_argument("--phone-app", required=True)
     parser.add_argument("--watch-app", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--only", help="Run one named scenario")
     args = parser.parse_args()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
 
     def run(*values):
-        result = subprocess.run([args.simctl, *values], capture_output=True, text=True, check=True)
+        result = subprocess.run([args.simctl, *values], capture_output=True, text=True)
         if result.stdout:
             print(result.stdout.strip(), flush=True)
         if result.stderr:
             print(result.stderr.strip(), flush=True)
+        result.check_returncode()
         return result.stdout.strip()
 
     phone_bundle = "io.github.shikanon.wristjournal"
@@ -33,6 +35,8 @@ def main():
     run("privacy", args.watch, "revoke", "microphone", watch_bundle)
 
     def scenario(device, bundle, root, name, launch_args):
+        if args.only and name != args.only:
+            return
         container = Path(run("get_app_container", device, bundle, "data"))
         result_path = container / "Library/Application Support" / root / "simulation-result.json"
         result_path.unlink(missing_ok=True)
@@ -57,7 +61,9 @@ def main():
              base + ["-journal-fixture-cloud-failure"])
     scenario(args.watch, watch_bundle, "WristJournalWatchUITests", "watch-permission-and-purge",
              ["-journal-watch-simulation"])
-    print("PASS: all four simulator scenarios", flush=True)
+    scenario(args.phone, phone_bundle, "WristJournalUITests", "phone-incremental-power",
+             ["-journal-fixture", "-journal-fixture-reset", "-journal-power-simulation"])
+    print(f"PASS: {args.only or 'all five simulator scenarios'}", flush=True)
 
 
 if __name__ == "__main__":

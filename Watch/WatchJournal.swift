@@ -12,6 +12,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published private(set) var generatingReport = false
     @Published var message: String?
     @Published private(set) var collectLocation = UserDefaults.standard.bool(forKey: "collectMeetingLocation")
+    @Published private(set) var collectionMode = CollectionMode.system
+    @Published private(set) var collectionStatus: String?
 
     let store: JournalStore
     private let health = HealthReader()
@@ -25,13 +27,18 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }()
     private var locating: UUID?
     private var locationDeadline: Task<Void, Never>?
+    private var deferredKnown: Set<UUID>?
+    private var deferredPurges: Set<UUID> = []
+    private lazy var precise = PreciseCollection { [weak self] text in self?.collectionStatus = text }
 
-    lazy var transfer = CompanionTransfer(store: store) { [weak self] event in
+    lazy var transfer: CompanionTransfer = CompanionTransfer(store: store) { [weak self] event in
         Task { @MainActor [weak self] in
             guard let self else { return }
             switch event {
             case .message(let message): self.message = message
-            case .ready: self.queueRecordings()
+            case .ready:
+                if self.current == nil { self.collectionMode = self.transfer.collectionMode }
+                self.queueRecordings()
             case .sync(let known, let purged):
                 self.purge(purged)
                 self.queueRecordings(known: known)
@@ -44,10 +51,19 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }
 
     private func purge(_ ids: [UUID]) {
+        var acknowledged: [UUID] = []
         for id in ids where current?.id != id {
-            transfer.cancelTransfer(id)
-            try? store.purgeRaw(id)
+            do {
+                transfer.cancelTransfer(id)
+                try store.purgeRaw(id)
+                // Unknown IDs are already absent. Never ACK a failed unlink.
+                guard !FileManager.default.fileExists(atPath: try store.audio(id).path) else { continue }
+                acknowledged.append(id)
+                try store.acknowledgePurge([id])
+            } catch { message = error.localizedDescription }
         }
+        deferredPurges.formUnion(ids.filter { current?.id == $0 })
+        try? transfer.acknowledgePurge(acknowledged)
         reload()
     }
 
@@ -112,10 +128,11 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     private func reload() {
         do {
-            let entries = try store.list()
-            for entry in entries where entry.rawDeletedAt != nil {
-                if FileManager.default.fileExists(atPath: try store.audio(entry.id).path) { try store.purgeRaw(entry.id) }
+            for id in try store.pendingPurgeIDs() {
+                if FileManager.default.fileExists(atPath: try store.audio(id).path) { try store.purgeRaw(id) }
+                try store.acknowledgePurge([id])
             }
+            let entries = try store.pendingRecordings()
             recordings = try entries.map { entry in
                 guard entry.state == .recording, current?.id != entry.id else { return entry }
                 return try finalize(entry, interrupted: true)
@@ -135,6 +152,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         var pending: Recording?
         do {
             guard await AVAudioApplication.requestRecordPermission() else { throw JournalError.microphoneDenied }
+            transfer.pauseFileTransfers()
             let space = try store.availableStorage()
             if let free = space.free, free < 16 * 1024 * 1024 { throw JournalError.storageFull }
             try session.setCategory(.record)
@@ -156,6 +174,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             guard recorder.record() else { throw JournalError.recordingFailed }
             self.recorder = recorder
             current = entry
+            collectionMode = transfer.collectionMode
+            if collectionMode == .precise { await precise.start(at: entry.startedAt) }
             WKInterfaceDevice.current().play(.start)
             requestLocation(for: entry.id)
         } catch {
@@ -169,6 +189,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         if current != nil, recorder?.isRecording != true {
             finish(interrupted: true)
         }
+        queueRecordings()
     }
 
     func setCollectLocation(_ enabled: Bool) {
@@ -218,6 +239,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     func finish(interrupted: Bool = false) {
         guard let current else { return }
+        let motion = precise.stop()
         cancelLocation()
         let recorder = self.recorder
         self.recorder = nil
@@ -227,20 +249,40 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         try? AVAudioSession.sharedInstance().setActive(false)
 
         do {
-            let saved = try finalize(current, interrupted: interrupted)
+            var source = current
+            source.motionWindows = motion.isEmpty ? nil : motion
+            let saved = try finalize(source, interrupted: interrupted)
             reload()
             if !saved.isPlayable {
                 message = JournalError.recordingFailed.localizedDescription
             } else if interrupted {
                 message = "音频会话被系统中断，已保存可播放的部分。"
             }
-            if saved.isPlayable, saved.storage == .phone { queueRecordings() }
+            if !deferredPurges.isEmpty {
+                let ids = Array(deferredPurges)
+                deferredPurges.removeAll()
+                purge(ids)
+            }
+            if saved.isPlayable { queueRecordings() }
         } catch {
             message = error.localizedDescription
         }
     }
 
     private func queueRecordings(known: Set<UUID>? = nil) {
+        if let known { deferredKnown = known }
+        let device = WKInterfaceDevice.current()
+        device.isBatteryMonitoringEnabled = true
+        guard TransferPolicy.allowsAutomatic(recording: current != nil || starting,
+            chargingOnly: transfer.transferChargingOnly, charging: [.charging, .full].contains(device.batteryState)) else {
+            if transfer.transferChargingOnly, current == nil, !recordings.isEmpty {
+                WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: .now.addingTimeInterval(1800),
+                    userInfo: nil) { _ in }
+            }
+            return
+        }
+        let known = deferredKnown
+        deferredKnown = nil
         for entry in recordings where entry.isPlayable {
             if known?.contains(entry.id) == true {
                 if entry.storage == .phone { confirmPhoneStorage(entry.id) }
@@ -318,6 +360,10 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }
 
     func send(_ entry: Recording) {
+        guard current == nil, !starting else {
+            message = "请先结束录音，再发送文件。"
+            return
+        }
         do {
             let queued = try transfer.send(entry)
             message = queued ? "已加入发送队列。" : "这段录音正在等待发送。"

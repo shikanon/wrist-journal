@@ -40,6 +40,7 @@ struct WristJournalPhone: App {
             .modifier(JournalNotice(message: $journal.message))
             .task {
                 #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-journal-power-simulation") { await journal.runPowerSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") { await journal.runSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { journal.verifySimulationPersistence() }
                 #endif
@@ -94,6 +95,9 @@ private struct PhoneRecordings: View {
                                     }
                                 }
                             }
+                        }
+                        if journal.hasMoreRecordings {
+                            Button("加载更早录音") { journal.loadMoreRecordings() }
                         }
                     }
                 }
@@ -248,6 +252,9 @@ private struct JournalSettings: View {
                 Picker("录音存储", selection: $journal.storage) {
                     ForEach(RecordingStorage.allCases) { Text($0.title).tag($0) }
                 }
+                Toggle("手表仅充电时自动传输", isOn: Binding(
+                    get: { journal.dailySettings.transferChargingOnly ?? false },
+                    set: { journal.dailySettings.transferChargingOnly = $0 }))
             } footer: {
                 Text("自动模式优先交给 iPhone。手表先离线暂存，iPhone 确认保存后清理手表副本。设置对后续录音生效；每日分析完成后，两端原音都会按清理策略删除。")
             }
@@ -271,6 +278,11 @@ private struct JournalSettings: View {
                 TextField("模型 ID 或接入点 ID", text: $journal.model)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                Picker("音频上传", selection: Binding(
+                    get: { journal.dailySettings.audioFormat ?? .automatic },
+                    set: { journal.dailySettings.audioFormat = $0 })) {
+                    ForEach(AudioUploadFormat.allCases) { Text($0.title).tag($0) }
+                }
             }
             Section {
                 Toggle("分析时使用会议背景", isOn: $journal.includeContext)
@@ -280,6 +292,12 @@ private struct JournalSettings: View {
             Section {
                 Toggle("自动每日分析", isOn: $journal.dailySettings.automatic)
                 Toggle("仅充电时自动分析", isOn: $journal.dailySettings.chargingOnly)
+                Toggle("仅 Wi-Fi 自动上传", isOn: Binding(
+                    get: { journal.dailySettings.wifiOnly ?? true },
+                    set: { journal.dailySettings.wifiOnly = $0 }))
+                Toggle("跳过明确的长静音", isOn: Binding(
+                    get: { journal.dailySettings.skipSilence ?? true },
+                    set: { journal.dailySettings.skipSilence = $0 }))
                 Toggle("读取健康与运动数据", isOn: $journal.dailySettings.healthEnabled)
                     .onChange(of: journal.dailySettings.healthEnabled) {
                         if journal.dailySettings.healthEnabled { Task { await journal.authorizeDailyHealth() } }
@@ -290,6 +308,19 @@ private struct JournalSettings: View {
                 Text("每日分析与存储")
             } footer: {
                 Text("开启自动分析即允许将结束日期的录音分段发送到火山方舟。日报成功保存后清理两端原音；云备份开启时先备份录音与地点到私人 iCloud，备份失败会保留原音。健康样本仅在本地关联，不上传 iCloud。后台时机由系统安排，打开 App 可补跑。")
+            }
+            .disabled(journal.processingDays)
+            Section {
+                Picker("采集模式", selection: Binding(
+                    get: { journal.dailySettings.collectionMode ?? .system },
+                    set: {
+                        journal.dailySettings.collectionMode = $0
+                        if $0 == .precise { journal.dailySettings.healthEnabled = true }
+                    })) {
+                    ForEach(CollectionMode.allCases) { Text($0.title).tag($0) }
+                }
+            } footer: {
+                Text("系统模式读取已有心率与运动数据。精准模式在手表录音期间主动采集更细的手腕运动，并监听新增心率；结束即停止，更耗电。心率采样频率仍由 watchOS 控制，普通会议不会启动训练或保证连续心率。设置同步到手表后，对下一段录音生效。")
             }
             .disabled(journal.processingDays)
             Section {

@@ -1,4 +1,5 @@
 import SwiftUI
+import CryptoKit
 
 @MainActor
 final class PhoneJournal: ObservableObject {
@@ -13,11 +14,16 @@ final class PhoneJournal: ObservableObject {
     @Published var days: [DailyJournalReport] = []
     @Published var processingDays = false
     @Published var dailyStatus: String?
+    @Published private(set) var hasMoreRecordings = false
+    @Published private(set) var hasMoreDays = false
+    private var recordingLimit = 50
+    private var dayLimit = 31
     @Published var dailySettings = DailySettings.load() {
         didSet {
             dailySettings.save()
             AnalysisScheduling.schedule(settings: dailySettings)
             if !dailySettings.automatic { automaticDailyTask?.cancel() }
+            publishStorage()
         }
     }
     @Published var storage = RecordingStorage(rawValue: UserDefaults.standard.string(forKey: RecordingStorage.settingsKey) ?? "") ?? .automatic {
@@ -40,6 +46,8 @@ final class PhoneJournal: ObservableObject {
     let store: JournalStore
     let analyzer = MeetingAnalyzer()
     let dailyHealth = DailyHealthReader()
+    let network = UploadNetwork()
+    lazy var workState = DailyWorkState.load(store)
     lazy var cloudBackup = CloudBackup()
     private var worker: Task<Void, Never>?
     private var automaticDailyTask: Task<Void, Never>?
@@ -47,7 +55,7 @@ final class PhoneJournal: ObservableObject {
 
     func foregroundEntered() {
         resumeAnalysis()
-        guard automaticDailyTask == nil, dailySettings.automatic else { return }
+        guard automaticDailyTask == nil, dailySettings.automatic || dailySettings.healthEnabled else { return }
         automaticDailyTask = Task { [weak self] in
             guard let self else { return }
             defer { self.automaticDailyTask = nil }
@@ -70,7 +78,9 @@ final class PhoneJournal: ObservableObject {
             case .message(let message): self?.message = message
             case .ready:
                 self?.publishStorage()
-                if let ids = try? self?.store.purgedIDs() { self?.notifyWatchPurge(ids) }
+                if let ids = try? self?.store.pendingPurgeIDs() { self?.notifyWatchPurge(ids) }
+            case .purgeAcknowledged(let ids):
+                try? self?.store.acknowledgePurge(ids)
             }
         }
     }
@@ -88,12 +98,7 @@ final class PhoneJournal: ObservableObject {
         ArkCredential.loadManagedDefault()
         hasOfficialKey = ArkCredential.official.load() != nil
         reload()
-        for entry in recordings {
-            if let url = try? store.analysisURL(entry.id), let data = try? Data(contentsOf: url),
-               let job = try? JSONDecoder().decode(MeetingAnalysisJob.self, from: data) {
-                jobs[entry.id] = job
-            }
-        }
+        for id in (try? store.unfinishedAnalysisIDs()) ?? [] { loadJob(id) }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-journal-fixture"),
            ProcessInfo.processInfo.arguments.contains("-journal-fixture-reset") {
@@ -138,6 +143,23 @@ final class PhoneJournal: ObservableObject {
                   digests[0].events[0].peakBPM == 120,
                   success != cloudFailure, exists == cloudFailure,
                   (saved.rawDeletedAt == nil) == cloudFailure else { throw JournalError.invalidTransfer }
+            if cloudFailure {
+                let day = JournalDayKey(recording: entry)
+                guard dailyStatus?.hasPrefix("分析或备份未完成，原音已保留。") == true,
+                      let deadline = workState.backupRetries[day.id]?.nextAttempt else {
+                    throw JournalError.invalidTransfer
+                }
+                guard await processDays(automatic: false) == false,
+                      workState.backupRetries[day.id]?.nextAttempt == deadline,
+                      workState.backupRetries[day.id]?.failures == 1,
+                      var legacy = try store.daily(day) else { throw JournalError.invalidTransfer }
+                legacy.requiredBackupIDs = nil
+                try store.saveDaily(legacy)
+                workState.backupRetries.removeValue(forKey: day.id)
+                try workState.save(store)
+                guard await processDays(automatic: false) == false,
+                      workState.backupRetries[day.id]?.failures == 1 else { throw JournalError.invalidTransfer }
+            }
             if !cloudFailure {
                 guard jobs[entry.id]?.notes.isEmpty == true else { throw JournalError.invalidTransfer }
                 _ = await processDays(automatic: false)
@@ -160,7 +182,8 @@ final class PhoneJournal: ObservableObject {
                         "meetingCount": digests.count, "eventCount": digests[0].events.count,
                         "healthDayCount": days.count, "originalExists": exists,
                         "minutesPreserved": digests[0].minutes.contains("行动项"),
-                        "weeklyMonthlyVerified": true, "damagedDayRetained": !cloudFailure]
+                        "weeklyMonthlyVerified": true, "damagedDayRetained": !cloudFailure,
+                        "backupCooldownVerified": cloudFailure, "legacyBackupRetried": cloudFailure]
         } catch {
             evidence = ["passed": false, "error": error.localizedDescription]
         }
@@ -187,19 +210,45 @@ final class PhoneJournal: ObservableObject {
 
     func syncRecordings() {
         do {
-            try transfer.publishStorage(storage)
-            let known = recordings.lazy.filter { entry in
+            try transfer.publishSettings(storage: storage, settings: dailySettings)
+            let known = try store.pendingRecordings().lazy.filter { entry in
                 guard entry.isPlayable, let url = try? self.store.audio(entry.id) else { return false }
                 return FileManager.default.fileExists(atPath: url.path)
             }.prefix(500).map(\.id)
-            let direct = try transfer.syncRecordings(known: Array(known), purged: store.purgedIDs())
+            let direct = try transfer.syncRecordings(known: Array(known), purged: store.pendingPurgeIDs())
             syncStatus = direct ? "正在请求录音，文件会陆续到达" : "已排队，手表可用后会自动同步"
         } catch {
             message = error.localizedDescription
         }
     }
 
-    private func publishStorage() { try? transfer.publishStorage(storage) }
+    private func publishStorage() { try? transfer.publishSettings(storage: storage, settings: dailySettings) }
+
+    var analysisConfiguration: String {
+        analysisConfiguration(model: model, credential: credential.rawValue)
+    }
+
+    private func analysisConfiguration(model: String, credential: String) -> String {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = trimmed.isEmpty ? MeetingAnalyzer.defaultModel : trimmed
+        let value = "\(credential)|\(resolved)|\(ArkCredential(rawValue: credential)?.load() ?? "missing")"
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func requireAutomaticUpload(externalPowerGranted: Bool = false) throws {
+        try Task.checkCancellation()
+        guard dailySettings.automatic,
+              AnalysisScheduling.canRun(settings: dailySettings, externalPowerGranted: externalPowerGranted) else {
+            throw CancellationError()
+        }
+        guard network.allows(wifiOnly: dailySettings.wifiOnly ?? true) else { throw WorkDeferred.network }
+    }
+
+    private func loadJob(_ id: UUID) {
+        guard let url = try? store.analysisURL(id), let data = try? Data(contentsOf: url),
+              let job = try? JSONDecoder().decode(MeetingAnalysisJob.self, from: data) else { return }
+        jobs[id] = job
+    }
 
     func savePersonalKey(_ key: String) -> Bool {
         do {
@@ -238,10 +287,16 @@ final class PhoneJournal: ObservableObject {
         var job = MeetingAnalysisJob(model: resolvedModel, credential: selectedCredential, includeContext: selectedContext)
         if let previous = jobs[entry.id], previous.state != .complete, previous.model == resolvedModel,
            previous.credential == selectedCredential, previous.includeContext == selectedContext {
-            job.notes = previous.notes
-            job.totalChunks = previous.totalChunks
-            job.speechWindows = previous.speechWindows
+            guard previous.retry?.blockedConfiguration != analysisConfiguration else {
+                message = WorkDeferred.configuration.localizedDescription
+                return
+            }
+            job = previous
+            job.state = .queued
+            job.retry = nil
+            job.error = nil
         }
+        job.automatic = false
         do {
             try save(job, for: entry.id)
             resumeAnalysis()
@@ -251,20 +306,24 @@ final class PhoneJournal: ObservableObject {
     }
 
     func resumeAnalysis() {
-        guard worker == nil, !processingDays, jobs.values.contains(where: { $0.state == .queued }) else { return }
+        // Legacy jobs have no source flag. Only explicitly manual jobs may bypass automatic policy.
+        guard worker == nil, !processingDays, jobs.values.contains(where: { $0.state == .queued && $0.automatic == false }) else { return }
         worker = Task { [weak self] in await self?.runAnalysis() }
     }
 
     private func runAnalysis() async {
         defer { worker = nil; analyzing = nil }
-        while let entry = recordings.reversed().first(where: { jobs[$0.id]?.state == .queued }),
+        while let id = jobs.first(where: { $0.value.state == .queued && $0.value.automatic == false })?.key,
+              let entry = try? store.recording(id),
               var job = jobs[entry.id] {
             analyzing = entry.id
+            let configuration = analysisConfiguration(model: job.model, credential: job.credential)
             do {
                 guard let key = ArkCredential(rawValue: job.credential)?.load() else {
                     throw AnalysisError.missingCredential
                 }
-                let result = try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key) {
+                let result = try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key,
+                    format: dailySettings.audioFormat ?? .automatic, skipSilence: dailySettings.skipSilence ?? true) {
                     [weak self] snapshot in
                     try await self?.save(snapshot, for: entry.id)
                 }
@@ -273,6 +332,9 @@ final class PhoneJournal: ObservableObject {
                 job = jobs[entry.id] ?? job
                 job.state = .failed
                 job.error = error.localizedDescription
+                var retry = job.retry ?? RetryState()
+                retry.fail(configuration: configuration, authentication: isAuthenticationError(error))
+                job.retry = retry
                 do { try save(job, for: entry.id) }
                 catch {
                     jobs[entry.id] = job
@@ -283,15 +345,20 @@ final class PhoneJournal: ObservableObject {
     }
 
     func save(_ job: MeetingAnalysisJob, for id: UUID) throws {
-        try JSONEncoder().encode(job).write(to: store.analysisURL(id), options: .atomic)
+        try store.saveAnalysis(JSONEncoder().encode(job), id: id, complete: job.state == .complete)
         jobs[id] = job
     }
 
     func reload() {
         do {
-            recordings = try store.list()
+            let page = try store.list(limit: recordingLimit + 1)
+            hasMoreRecordings = page.count > recordingLimit
+            recordings = Array(page.prefix(recordingLimit))
+            for entry in recordings where jobs[entry.id] == nil { loadJob(entry.id) }
             report = try store.report()
-            days = try store.dailyReports()
+            let history = try store.dailyReports(limit: dayLimit + 1)
+            hasMoreDays = history.count > dayLimit
+            days = Array(history.prefix(dayLimit))
             reportIsDaily = false
             if let latest = days.map(\.generatedAt).max(), latest >= (report?.generatedAt ?? .distantPast) {
                 report = HealthReport(generatedAt: latest,
@@ -305,12 +372,20 @@ final class PhoneJournal: ObservableObject {
         }
     }
 
+    func loadMoreRecordings() { recordingLimit += 50; reload() }
+    func loadMoreDays() { dayLimit += 31; reload() }
+
     func authorizeDailyHealth() async {
-        do { try await dailyHealth.authorize() }
+        do {
+            try await dailyHealth.authorize()
+            workState.dirtyHealthDays.formUnion(try store.dailyKeys())
+            try workState.save(store)
+        }
         catch { message = error.localizedDescription }
     }
 
     func analyzeForDay(_ entry: Recording, automatic: Bool = false, externalPowerGranted: Bool = false) async throws -> MeetingAnalysisJob {
+        if jobs[entry.id] == nil { loadJob(entry.id) }
         if let job = jobs[entry.id], job.state == .complete, let minutes = job.minutes, !minutes.isEmpty { return job }
         let resolvedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         var job = MeetingAnalysisJob(
@@ -319,23 +394,47 @@ final class PhoneJournal: ObservableObject {
         if let previous = jobs[entry.id], previous.model == job.model, previous.credential == job.credential {
             job = previous
         }
-        guard let key = ArkCredential(rawValue: job.credential)?.load() else { throw AnalysisError.missingCredential }
+        let configuration = analysisConfiguration(model: job.model, credential: job.credential)
+        if let retry = job.retry, !retry.allows(configuration: configuration) {
+            throw retry.blockedConfiguration == configuration ? WorkDeferred.configuration : WorkDeferred.cooldown
+        }
+        if !workState.uploadRetry.allows(configuration: configuration) {
+            throw workState.uploadRetry.blockedConfiguration == configuration ? WorkDeferred.configuration : WorkDeferred.cooldown
+        }
         job.state = .queued
+        job.automatic = true
         job.error = nil
         try save(job, for: entry.id)
         do {
-            let result = try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key) {
+            if automatic { try requireAutomaticUpload(externalPowerGranted: externalPowerGranted) }
+            guard let key = ArkCredential(rawValue: job.credential)?.load() else { throw AnalysisError.missingCredential }
+            let result = try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key,
+                format: dailySettings.audioFormat ?? .automatic, skipSilence: dailySettings.skipSilence ?? true,
+                wifiOnly: automatic && (dailySettings.wifiOnly ?? true),
+                beforeRequest: { [weak self] in
+                    if automatic { try await self?.requireAutomaticUpload(externalPowerGranted: externalPowerGranted) }
+                }) {
                 [weak self] snapshot in
                 try await self?.saveDailyCheckpoint(snapshot, id: entry.id, automatic: automatic,
                                                      externalPowerGranted: externalPowerGranted)
             }
             try save(result, for: entry.id)
+            workState.uploadRetry = RetryState()
+            try workState.save(store)
             return result
         } catch {
             job = jobs[entry.id] ?? job
             job.state = .failed
             job.error = error.localizedDescription
+            if !Task.isCancelled, !(error is CancellationError), !(error is WorkDeferred) {
+                var retry = job.retry ?? RetryState()
+                retry.fail(configuration: configuration, authentication: isAuthenticationError(error))
+                job.retry = retry
+                workState.uploadRetry = retry
+                try workState.save(store)
+            }
             try save(job, for: entry.id)
+            try Task.checkCancellation()
             throw error
         }
     }
@@ -350,10 +449,21 @@ final class PhoneJournal: ObservableObject {
     }
 
     func compactAnalysis(_ id: UUID) throws {
+        if jobs[id] == nil { loadJob(id) }
         guard var job = jobs[id] else { return }
+        guard !job.notes.isEmpty || job.speechWindows != nil || job.audioPlan != nil else { return }
         job.notes = []
         job.speechWindows = nil
+        job.audioPlan = nil
         try save(job, for: id)
+    }
+
+    func isAuthenticationError(_ error: Error) -> Bool {
+        guard let error = error as? AnalysisError else { return false }
+        switch error {
+        case .missingCredential, .http(401), .http(403): return true
+        default: return false
+        }
     }
 
     func notifyWatchPurge(_ ids: [UUID]) {

@@ -8,6 +8,8 @@
     <string>开启会议地点后，在开始录音时获取一次大概位置。你可以选择是否将地点用于会议分析。</string>
     <key>NSHealthShareUsageDescription</key>
     <string>在手表上读取心率、静息心率、心率变异性、步数与活动能量，生成离线健康报告。</string>
+    <key>NSMotionUsageDescription</key>
+    <string>精准模式下，仅在录音期间主动采集手腕运动，用于区分心率变化时是否伴随运动。</string>
     <key>WKApplication</key>
     <true/>
     <key>WKRunsIndependentlyOfCompanionApp</key>

@@ -82,6 +82,11 @@ struct MeetingAnalysisJob: Codable, Sendable {
     var minutes: String?
     var error: String?
     var speechWindows: [SpeechWindow]?
+    var retry: RetryState?
+    var automatic: Bool?
+    var audioPlan: AudioPlan?
+    var uploadFormat: AudioUploadFormat?
+    var uploadedBytes: Int?
 }
 
 private struct ArkClient {
@@ -91,6 +96,8 @@ private struct ArkClient {
 
     let key: String
     let model: String
+    var wifiOnly = false
+    var beforeRequest: @Sendable () async throws -> Void = {}
 
     private struct Reply: Decodable {
         struct Choice: Decodable {
@@ -101,10 +108,12 @@ private struct ArkClient {
         let choices: [Choice]
     }
 
-    func complete(prompt: String, audio: Data? = nil) async throws -> String {
+    func complete(prompt: String, audio: Data? = nil, format: AudioUploadFormat = .wav) async throws -> String {
+        try Task.checkCancellation()
+        try await beforeRequest()
         var content: [[String: Any]] = []
         if let audio {
-            content.append(["type": "input_audio", "input_audio": ["data": audio.base64EncodedString(), "format": "wav"]])
+            content.append(["type": "input_audio", "input_audio": ["data": audio.base64EncodedString(), "format": format.rawValue]])
         }
         content.append(["type": "text", "text": prompt])
         let body: [String: Any] = [
@@ -120,6 +129,9 @@ private struct ArkClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.allowsCellularAccess = !wifiOnly
+        request.allowsExpensiveNetworkAccess = !wifiOnly
+        request.allowsConstrainedNetworkAccess = !wifiOnly
         let (data, response) = try await Self.session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw AnalysisError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else { throw AnalysisError.http(response.statusCode) }
@@ -135,27 +147,39 @@ actor MeetingAnalyzer {
     static let defaultModel = ArkClient.defaultModel
 
     func run(recording: Recording, url: URL, job initial: MeetingAnalysisJob, key: String,
+             format uploadFormat: AudioUploadFormat = .automatic, skipSilence: Bool = true, wifiOnly: Bool = false,
+             beforeRequest: @escaping @Sendable () async throws -> Void = {},
              checkpoint: @Sendable (MeetingAnalysisJob) async throws -> Void) async throws -> MeetingAnalysisJob {
-        let client = ArkClient(key: key, model: initial.model)
+        let client = ArkClient(key: key, model: initial.model, wifiOnly: wifiOnly, beforeRequest: beforeRequest)
         let audio = try AVAudioFile(forReading: url)
         let format = audio.processingFormat
         let rate = format.sampleRate
         let channels = Int(format.channelCount)
         guard rate.isFinite, rate > 0, channels > 0, audio.length > 0 else { throw AnalysisError.unreadableAudio }
-        // Aim for two minutes, with at most 4 MiB of PCM payload even for older recordings.
-        let framesPerChunk = AVAudioFramePosition(min(120 * rate, Double(4 * 1024 * 1024 / (2 * channels))))
-        guard framesPerChunk > 0 else { throw AnalysisError.unreadableAudio }
         var job = initial
-        job.totalChunks = Int((audio.length - 1) / framesPerChunk + 1)
+        // Existing checkpoints retain their original uniform segmentation.
+        let plan = try job.audioPlan ?? AudioPreparation.plan(audio, skipSilence: skipSilence && job.notes.isEmpty)
+        guard plan.sampleRate == rate, plan.sourceFrames == audio.length else { throw AnalysisError.unreadableAudio }
+        job.audioPlan = plan
+        let uploadFormat = (job.uploadFormat ?? uploadFormat).resolved(model: job.model)
+        job.uploadFormat = uploadFormat
+        job.totalChunks = plan.segments.count
         guard job.notes.count <= job.totalChunks else { throw AnalysisError.unreadableAudio }
         try await checkpoint(job)
+        if plan.segments.isEmpty {
+            job.minutes = "录音中仅检测到持续静音，未上传音频；没有可生成的会议内容。"
+            job.speechWindows = []
+            job.state = .complete
+            job.retry = nil
+            return job
+        }
 
         for index in job.notes.count..<job.totalChunks {
             try Task.checkCancellation()
-            let startFrame = AVAudioFramePosition(index) * framesPerChunk
-            let frameCount = min(framesPerChunk, audio.length - startFrame)
-            audio.framePosition = startFrame
-            let data = try encodeChunk(audio, frameCount: AVAudioFrameCount(frameCount))
+            let segment = plan.segments[index]
+            let startFrame = segment.startFrame
+            let frameCount = segment.frameCount
+            let data = try AudioPreparation.encode(segment, audio: audio, source: url, format: uploadFormat)
             let start = durationText(Double(startFrame) / rate)
             let end = durationText(Double(startFrame + frameCount) / rate)
             let text = try await client.complete(
@@ -164,12 +188,13 @@ actor MeetingAnalyzer {
                 {"minutes":"中文纪要，500字以内，包含议题、事实、分歧、决定、待办和不确定项","energeticSpeech":[{"startSeconds":0,"endSeconds":10,"evidence":"可听见的语速加快、音量升高或激烈措辞"}]}
                 时间是相对此分段开始的秒数，范围为 0 到 \(Double(frameCount) / rate)。仅有清晰听觉证据时记录激动说话线索；普通发言、背景声、无声段落返回空数组。不推断说话者身份、心理状态或疾病。
                 """,
-                audio: data
+                audio: data, format: uploadFormat
             )
             let parsed = try SpeechChunk.parse(text, start: recording.startedAt.addingTimeInterval(Double(startFrame) / rate),
                                                duration: Double(frameCount) / rate)
             job.notes.append("[\(start)–\(end)]\n\(parsed.0)")
             job.speechWindows = (job.speechWindows ?? []) + parsed.1
+            job.uploadedBytes = (job.uploadedBytes ?? 0) + data.count
             try await checkpoint(job)
         }
 
@@ -195,27 +220,8 @@ actor MeetingAnalyzer {
             \(notes)
             """)
         job.state = .complete
+        job.retry = nil
         return job
-    }
-
-    private func encodeChunk(_ audio: AVAudioFile, frameCount: AVAudioFrameCount) throws -> Data {
-        let format = audio.processingFormat
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw AnalysisError.unreadableAudio
-        }
-        try audio.read(into: buffer, frameCount: frameCount)
-        guard buffer.frameLength == frameCount else { throw AnalysisError.unreadableAudio }
-        let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
-        defer { try? FileManager.default.removeItem(at: url) }
-        do {
-            let output = try AVAudioFile(forWriting: url, settings: [
-                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate,
-                AVNumberOfChannelsKey: format.channelCount, AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
-            ], commonFormat: format.commonFormat, interleaved: format.isInterleaved)
-            try output.write(from: buffer)
-        }
-        return try Data(contentsOf: url)
     }
 
     private func meetingContext(_ recording: Recording, included: Bool) async -> String {

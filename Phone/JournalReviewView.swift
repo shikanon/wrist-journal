@@ -20,6 +20,13 @@ struct JournalReviewView: View {
             } footer: {
                 Text("按录音开始时的当地日期归档。今日暂不清理；周和月回顾复用日报。")
             }
+            if journal.hasMoreDays {
+                Section {
+                    Text("当前显示已加载日期的回顾；更早日期按需加载。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("加载更早日期") { journal.loadMoreDays() }
+                }
+            }
             if journal.days.isEmpty {
                 Section { Text("暂无日报。同步录音后，分析已结束日期即可生成回顾。").foregroundStyle(.secondary) }
             } else if period == 0 {
@@ -109,7 +116,8 @@ private struct DailyReportView: View {
             Section {
                 Text("录音可能包含其他发言者，语音线索不一定来自佩戴者本人。与心率变化的时间重合不证明因果，也不等于疾病诊断。HealthKit 采样和同步可能不完整。")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text(report.canPurge ? "日报已保存，已具备原音清理条件。" : "等待备份完成，原音保留。")
+                Text(report.cleanupCompletedAt != nil ? "原音清理已完成。" :
+                    (report.canPurge ? "日报已保存，等待完成原音清理。" : "等待备份完成，原音保留。"))
                     .font(.footnote)
             }
         }.navigationTitle(report.day.localDate)

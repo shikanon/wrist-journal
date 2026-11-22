@@ -160,6 +160,7 @@ struct MeetingDigest: Codable, Identifiable, Sendable {
     let minutes: String
     let events: [HeartRateEvent]
     let healthNote: String?
+    var speechWindows: [SpeechWindow]?
 }
 
 struct DailyJournalReport: Codable, Identifiable, Sendable {
@@ -173,6 +174,7 @@ struct DailyJournalReport: Codable, Identifiable, Sendable {
     var backedUpRecordingIDs: [UUID] = []
     var requiredBackupIDs: [UUID]?
     var healthTimeZoneIdentifier: String?
+    var cleanupCompletedAt: Date?
     var id: String { day.id }
     var canPurge: Bool {
         !meetings.isEmpty && (!cloudBackupRequired || Set(requiredBackupIDs ?? meetings.map(\.id)).isSubset(of: Set(backedUpRecordingIDs)))

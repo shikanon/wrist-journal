@@ -35,6 +35,7 @@ private final class WatchApplicationDelegate: NSObject, WKApplicationDelegate {
             if let task = task as? WKWatchConnectivityRefreshBackgroundTask {
                 tasks.append(task)
             } else {
+                journal.checkRecording()
                 task.setTaskCompletedWithSnapshot(false)
             }
         }
@@ -73,6 +74,9 @@ private struct WatchHome: View {
                         .foregroundStyle(.red)
                     Text(entry.startedAt, style: .timer)
                         .font(.title2.monospacedDigit())
+                    if let status = journal.collectionStatus, journal.collectionMode == .precise {
+                        Text(status).font(.caption2).foregroundStyle(.secondary)
+                    }
                     Button(role: .destructive) { journal.finish() } label: {
                         Label("停止并保存", systemImage: "stop.fill")
                     }

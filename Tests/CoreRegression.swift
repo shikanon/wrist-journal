@@ -81,11 +81,24 @@ enum CoreRegression {
         try store.receive(source, recording: recording)
         try check(!FileManager.default.fileExists(atPath: audio.path), "late duplicate cannot resurrect audio")
         try check(try store.dailyReports().first?.meetings.first?.minutes == "决定与待办", "minutes survive cleanup")
-        try check(try store.purgeDaily(day) == [recording.id], "cleanup idempotent")
+        let tombstoneURL = root.appendingPathComponent(recording.id.uuidString).appendingPathComponent("recording.json")
+        let beforeRepeat = try Data(contentsOf: tombstoneURL)
+        try check(try store.purgeDaily(day).isEmpty, "completed tombstones are not rewritten")
+        try check(try Data(contentsOf: tombstoneURL) == beforeRepeat, "repeat cleanup preserves tombstone")
         // Simulate a crash after marking deleted but before unlinking.
         try Data([1, 2]).write(to: audio)
         try store.purgeRaw(recording.id)
         try check(!FileManager.default.fileExists(atPath: audio.path), "restart completes pending unlink")
+        try store.completeCleanup(day)
+        try check(try store.daily(day)?.cleanupCompletedAt != nil, "cleanup completion persisted")
+        try check(try !store.pendingDays().contains(day), "completed day excluded from work index")
+        try check(try store.pendingPurgeIDs().contains(recording.id), "purge stays pending before watch acknowledgement")
+        try store.acknowledgePurge([recording.id])
+        let reopened = JournalStore(root: root)
+        try check(try reopened.pendingPurgeIDs().isEmpty, "acknowledgement survives restart")
+        try check(try reopened.pendingDays().isEmpty, "restart only restores unfinished days")
+        try store.receive(source, recording: recording)
+        try check(try store.pendingPurgeIDs() == [recording.id], "late duplicate requeues purge without resurrection")
         let review = JournalReview.grouped([report], monthly: false)
         try check(review.count == 1 && review[0].meetingCount == 1 && review[0].sedentaryEvents == 1 && review[0].activityEvents == 1,
                   "weekly summary counts saved insights")
@@ -105,6 +118,56 @@ enum CoreRegression {
         let old = try JSONDecoder().decode(Recording.self, from: Data(legacy.utf8))
         try check(old.isPlayable && old.timeZoneIdentifier == nil && old.rawDeletedAt == nil, "old recordings decode")
         try check(RecordingStorage.automatic.destination(free: nil, capacity: nil) == .phone, "automatic storage favors phone")
+        var retry = RetryState()
+        retry.fail(configuration: "key-a", authentication: false, now: start)
+        try check(!retry.allows(configuration: "key-a", now: start.addingTimeInterval(59)), "retry cooling survives foreground reentry")
+        try check(retry.allows(configuration: "key-a", now: start.addingTimeInterval(60)), "retry opens at persisted deadline")
+        retry.fail(configuration: "key-a", authentication: false, now: start)
+        try check(retry.nextAttempt == start.addingTimeInterval(300), "backoff increases")
+        for _ in 0..<20 { retry.fail(configuration: "key-a", authentication: false, now: start) }
+        try check(retry.nextAttempt == start.addingTimeInterval(21600), "backoff bounded at six hours")
+        retry.fail(configuration: "key-a", authentication: true, now: start)
+        let restoredRetry = try JSONDecoder().decode(RetryState.self, from: JSONEncoder().encode(retry))
+        try check(!restoredRetry.allows(configuration: "key-a", now: start.addingTimeInterval(86400 * 30)),
+                  "invalid key remains blocked after restart")
+        try check(restoredRetry.allows(configuration: "key-b", now: start), "configuration change releases authentication block")
+        try check(!TransferPolicy.allowsAutomatic(recording: true, chargingOnly: false, charging: true),
+                  "recording excludes automatic file transfer")
+        try check(!TransferPolicy.allowsAutomatic(recording: false, chargingOnly: true, charging: false),
+                  "charging batch waits for power")
+        try check(TransferPolicy.allowsAutomatic(recording: false, chargingOnly: true, charging: true),
+                  "charging batch resumes with power")
+        let rangeA = DateInterval(start: start, duration: 300)
+        let rangeB = DateInterval(start: start.addingTimeInterval(330), duration: 100)
+        let rangeC = DateInterval(start: start.addingTimeInterval(600), duration: 60)
+        let merged = HealthQueryRanges.merged([rangeC, rangeB, rangeA])
+        try check(merged.count == 2 && merged[0].duration == 430, "adjacent meeting queries merged")
+        try check(!HealthQueryRanges.overlaps(rangeA, DateInterval(start: rangeA.end, duration: 10)),
+                  "health invalidation uses half open ranges")
+        try check(try store.affectedHealthDays([DateInterval(start: start.addingTimeInterval(30), duration: 1)]).contains(day),
+                  "late samples invalidate archived meeting date")
+        try check(try store.affectedHealthDays([DateInterval(start: start.addingTimeInterval(-86400 * 10), duration: 1)]).isEmpty,
+                  "unrelated sample leaves history cached")
+        let queueID = UUID()
+        let queued = Recording(id: queueID, startedAt: start.addingTimeInterval(600), duration: 20, state: .saved)
+        try store.save(queued)
+        try store.saveAnalysis(Data(#"{"state":"queued"}"#.utf8), id: queueID, complete: false)
+        try check(try JournalStore(root: root).unfinishedAnalysisIDs() == [queueID], "analysis work index survives restart")
+        try store.saveAnalysis(Data(#"{"state":"complete"}"#.utf8), id: queueID, complete: true)
+        try check(try store.unfinishedAnalysisIDs().isEmpty, "completed analysis leaves work queue")
+        for index in 0..<55 {
+            try store.save(Recording(id: UUID(), startedAt: start.addingTimeInterval(Double(index)), duration: 1, state: .saved))
+        }
+        let page1 = try store.list(limit: 20)
+        let page2 = try store.list(offset: 20, limit: 20)
+        try check(page1.count == 20 && page2.count == 20 &&
+                  Set(page1.map(\.id)).isDisjoint(with: page2.map(\.id)), "history pagination has no duplicates")
+        // An interrupted file/index commit is recovered from source files once.
+        try Data([1]).write(to: root.appendingPathComponent(".catalog-dirty"))
+        let recovered = JournalStore(root: root)
+        try check(try recovered.list().count == 57, "dirty catalog recovered from committed files")
+        try check(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".catalog-dirty").path),
+                  "catalog recovery clears dirty marker")
         print("PASS: \(checks) core regression checks")
     }
 }

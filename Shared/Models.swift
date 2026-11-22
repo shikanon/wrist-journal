@@ -14,6 +14,7 @@ struct Recording: Codable, Identifiable, Sendable {
     var location: MeetingLocation?
     var timeZoneIdentifier: String?
     var rawDeletedAt: Date?
+    var motionWindows: [ActivityWindow]?
 
     var isPlayable: Bool { rawDeletedAt == nil && (state == .saved || state == .interrupted) }
 

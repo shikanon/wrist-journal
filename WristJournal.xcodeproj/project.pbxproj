@@ -6,6 +6,17 @@
 	};
 	objectVersion = 56;
 	objects = {
+		B1000000000000000000000A = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSimulation.swift; sourceTree = "<group>"; };
+		B1000000000000000000000B = { isa = PBXBuildFile; fileRef = B1000000000000000000000A; };
+		B10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkPolicy.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 = { isa = PBXBuildFile; fileRef = B10000000000000000000001; };
+		B10000000000000000000003 = { isa = PBXBuildFile; fileRef = B10000000000000000000001; };
+		B10000000000000000000004 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPreparation.swift; sourceTree = "<group>"; };
+		B10000000000000000000005 = { isa = PBXBuildFile; fileRef = B10000000000000000000004; };
+		B10000000000000000000006 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreciseCollection.swift; sourceTree = "<group>"; };
+		B10000000000000000000007 = { isa = PBXBuildFile; fileRef = B10000000000000000000006; };
+		B10000000000000000000008 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHealthPipeline.swift; sourceTree = "<group>"; };
+		B10000000000000000000009 = { isa = PBXBuildFile; fileRef = B10000000000000000000008; };
 		A10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyInsights.swift; sourceTree = "<group>"; };
 		A10000000000000000000002 = { isa = PBXBuildFile; fileRef = A10000000000000000000001; };
 		A10000000000000000000003 = { isa = PBXBuildFile; fileRef = A10000000000000000000001; };
@@ -241,6 +252,7 @@
 			path = Shared;
 			sourceTree = "<group>";
 			children = (
+				B10000000000000000000001,
 				A10000000000000000000001,
 				A10000000000000000000004,
 				AB97FA3174CA598F8FCBC7D1,
@@ -279,6 +291,9 @@
 			path = Phone;
 			sourceTree = "<group>";
 			children = (
+				B1000000000000000000000A,
+				B10000000000000000000004,
+				B10000000000000000000008,
 				A10000000000000000000007,
 				A10000000000000000000009,
 				A1000000000000000000000B,
@@ -334,6 +349,7 @@
 			path = Watch;
 			sourceTree = "<group>";
 			children = (
+				B10000000000000000000006,
 				DE50420CAAA2504EB9460349,
 				B399D964CAD3562986A67802,
 				33B11CB85D12526E92184020,
@@ -385,6 +401,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000003,
+				B10000000000000000000007,
 				A10000000000000000000003,
 				A10000000000000000000006,
 				4A82EC75289A5EF39DDDA4D5,
@@ -556,6 +574,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B1000000000000000000000B,
+				B10000000000000000000002,
+				B10000000000000000000005,
+				B10000000000000000000009,
 				A10000000000000000000002,
 				A10000000000000000000005,
 				A10000000000000000000008,

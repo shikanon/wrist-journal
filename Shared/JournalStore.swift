@@ -1,185 +1,328 @@
 import Foundation
 
+private struct RecordingIndex: Codable {
+    let id: UUID
+    let start: Date
+    let day: JournalDayKey
+    let rawDeleted: Bool
+    init(_ entry: Recording) {
+        id = entry.id; start = entry.startedAt
+        day = JournalDayKey(recording: entry); rawDeleted = entry.rawDeletedAt != nil
+    }
+}
+
+private struct DailyIndex: Codable {
+    let day: JournalDayKey
+    let cleanupPending: Bool
+    let healthRange: DateInterval?
+    let meetingRanges: [DateInterval]
+    init(_ report: DailyJournalReport) {
+        day = report.day
+        cleanupPending = !report.meetings.isEmpty && report.cleanupCompletedAt == nil
+        healthRange = JournalDayKey(localDate: report.day.localDate,
+            timeZoneIdentifier: report.healthTimeZoneIdentifier ?? report.day.timeZoneIdentifier).interval
+        meetingRanges = report.meetings.map {
+            DateInterval(start: $0.startedAt.addingTimeInterval(-300),
+                         end: $0.startedAt.addingTimeInterval(max(0, $0.duration)))
+        }
+    }
+}
+
+private struct JournalCatalog: Codable {
+    var version = 2
+    var recordings: [String: RecordingIndex] = [:]
+    var days: [String: DailyIndex] = [:]
+    var unfinishedAnalysis: Set<UUID> = []
+    var pendingRecordings: Set<UUID> = []
+    var pendingCleanup: Set<JournalDayKey> = []
+}
+
+private final class StoreState {
+    let lock = NSRecursiveLock()
+    var catalog: JournalCatalog?
+    var root: URL?
+}
+
+/// Atomic files are the source of truth. A dirty marker makes index updates recoverable.
 struct JournalStore {
     private let files = FileManager.default
     private let customRoot: URL?
-    private let recordingWrites = NSLock()
-
-    init(root: URL? = nil) {
-        customRoot = root
-    }
+    private let state = StoreState()
+    init(root: URL? = nil) { customRoot = root }
 
     private func root() throws -> URL {
-        let location = customRoot ?? URL.applicationSupportDirectory.appendingPathComponent("WristJournal")
-        #if os(iOS)
-        let attributes: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
-        #else
-        let attributes: [FileAttributeKey: Any] = [:]
-        #endif
-        try files.createDirectory(at: location, withIntermediateDirectories: true, attributes: attributes)
-        var directory = location
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try directory.setResourceValues(values)
-        return directory
+        try state.lock.withLock {
+            if let root = state.root { return root }
+            var location = customRoot ?? URL.applicationSupportDirectory.appendingPathComponent("WristJournal")
+            #if os(iOS)
+            let attributes: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+            #else
+            let attributes: [FileAttributeKey: Any] = [:]
+            #endif
+            try files.createDirectory(at: location, withIntermediateDirectories: true, attributes: attributes)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try location.setResourceValues(values)
+            state.root = location
+            return location
+        }
     }
 
-    private func folder(_ id: UUID) throws -> URL {
-        try root().appendingPathComponent(id.uuidString, isDirectory: true)
+    func localStateURL(_ name: String) throws -> URL { try root().appendingPathComponent(name) }
+    private func folder(_ id: UUID) throws -> URL { try root().appendingPathComponent(id.uuidString, isDirectory: true) }
+    func audio(_ id: UUID) throws -> URL { try folder(id).appendingPathComponent("WristJournal-\(id.uuidString).m4a") }
+
+    private func directory(_ name: String) throws -> URL {
+        let url = try root().appendingPathComponent(name, isDirectory: true)
+        try files.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
-    func audio(_ id: UUID) throws -> URL {
-        try folder(id).appendingPathComponent("WristJournal-\(id.uuidString).m4a")
+    private func catalog() throws -> JournalCatalog {
+        if let cached = state.catalog { return cached }
+        let url = try localStateURL("catalog.json")
+        let dirty = try localStateURL(".catalog-dirty")
+        if !files.fileExists(atPath: dirty.path), let data = try? Data(contentsOf: url),
+           let saved = try? JSONDecoder().decode(JournalCatalog.self, from: data), saved.version == 2 {
+            state.catalog = saved
+            return saved
+        }
+        // One migration/recovery scan; normal reads only decode the requested page.
+        var rebuilt = JournalCatalog()
+        let migrated = files.fileExists(atPath: url.path)
+        for child in try files.contentsOfDirectory(at: root(), includingPropertiesForKeys: nil) {
+            guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
+            let entry = try recording(id)
+            rebuilt.recordings[id.uuidString] = RecordingIndex(entry)
+            if entry.rawDeletedAt == nil { rebuilt.pendingRecordings.insert(id) }
+            if let data = try? Data(contentsOf: analysisURL(id)),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               object["state"] as? String != "complete" { rebuilt.unfinishedAnalysis.insert(id) }
+            if !migrated, entry.rawDeletedAt != nil { try enqueuePurgeUnlocked(id) }
+        }
+        for url in try files.contentsOfDirectory(at: directory("Daily"), includingPropertiesForKeys: nil)
+            where url.pathExtension == "json" {
+            let report = try JSONDecoder().decode(DailyJournalReport.self, from: Data(contentsOf: url))
+            rebuilt.days[report.id] = DailyIndex(report)
+            if DailyIndex(report).cleanupPending { rebuilt.pendingCleanup.insert(report.day) }
+        }
+        try JSONEncoder().encode(rebuilt).write(to: url, options: .atomic)
+        if files.fileExists(atPath: dirty.path) { try files.removeItem(at: dirty) }
+        state.catalog = rebuilt
+        return rebuilt
+    }
+
+    private func change<T>(_ body: (inout JournalCatalog) throws -> T) throws -> T {
+        try state.lock.withLock {
+            var index = try catalog()
+            let dirty = try localStateURL(".catalog-dirty")
+            try Data([1]).write(to: dirty, options: .atomic)
+            do {
+                let value = try body(&index)
+                try JSONEncoder().encode(index).write(to: localStateURL("catalog.json"), options: .atomic)
+                state.catalog = index
+                try files.removeItem(at: dirty)
+                return value
+            } catch {
+                state.catalog = nil
+                throw error
+            }
+        }
     }
 
     func availableStorage() throws -> (free: Int64?, capacity: Int64?) {
         let space = try files.attributesOfFileSystem(forPath: root().path)
-        return ((space[.systemFreeSize] as? NSNumber)?.int64Value,
-                (space[.systemSize] as? NSNumber)?.int64Value)
+        return ((space[.systemFreeSize] as? NSNumber)?.int64Value, (space[.systemSize] as? NSNumber)?.int64Value)
     }
-
     func recording(_ id: UUID) throws -> Recording {
         try JSONDecoder().decode(Recording.self, from: Data(contentsOf: folder(id).appendingPathComponent("recording.json")))
     }
-
-    func list() throws -> [Recording] {
-        let children = try files.contentsOfDirectory(at: root(), includingPropertiesForKeys: nil,
-                                                     options: .skipsHiddenFiles)
-        return children.compactMap { directory in
-            guard let id = UUID(uuidString: directory.lastPathComponent),
-                  let data = try? Data(contentsOf: directory.appendingPathComponent("recording.json")),
-                  let recording = try? JSONDecoder().decode(Recording.self, from: data),
-                  recording.id == id else { return nil }
-            return recording
-        }.sorted { $0.startedAt > $1.startedAt }
-    }
-
-    func save(_ recording: Recording) throws {
-        let directory = try folder(recording.id)
-        try files.createDirectory(at: directory, withIntermediateDirectories: true)
-        try JSONEncoder().encode(recording).write(
-            to: directory.appendingPathComponent("recording.json"), options: .atomic
-        )
-    }
-
-    func delete(_ id: UUID) throws {
-        try recordingWrites.withLock {
-            try files.removeItem(at: folder(id))
+    func list(offset: Int = 0, limit: Int = .max) throws -> [Recording] {
+        try state.lock.withLock {
+            try catalog().recordings.values.sorted { $0.start > $1.start }
+                .dropFirst(max(0, offset)).prefix(max(0, limit)).map { try recording($0.id) }
         }
     }
-
+    func pendingRecordings(day: JournalDayKey? = nil) throws -> [Recording] {
+        try state.lock.withLock {
+            let index = try catalog()
+            return try index.pendingRecordings.compactMap { index.recordings[$0.uuidString] }
+                .filter { day == nil || $0.day == day }
+                .sorted { $0.start < $1.start }.map { try recording($0.id) }
+        }
+    }
+    func pendingDays() throws -> [JournalDayKey] {
+        try state.lock.withLock {
+            let index = try catalog()
+            return Array(Set(index.pendingRecordings.compactMap { index.recordings[$0.uuidString]?.day })
+                .union(index.pendingCleanup))
+                .sorted { $0.id < $1.id }
+        }
+    }
+    func unfinishedAnalysisIDs() throws -> Set<UUID> {
+        try state.lock.withLock { try catalog().unfinishedAnalysis }
+    }
+    private func write(_ entry: Recording, index: inout JournalCatalog) throws {
+        let url = try folder(entry.id)
+        try files.createDirectory(at: url, withIntermediateDirectories: true)
+        try JSONEncoder().encode(entry).write(to: url.appendingPathComponent("recording.json"), options: .atomic)
+        index.recordings[entry.id.uuidString] = RecordingIndex(entry)
+        if entry.rawDeletedAt == nil { index.pendingRecordings.insert(entry.id) }
+        else { index.pendingRecordings.remove(entry.id) }
+    }
+    func save(_ recording: Recording) throws { try change { try write(recording, index: &$0) } }
+    func delete(_ id: UUID) throws {
+        try change {
+            try files.removeItem(at: folder(id))
+            $0.recordings.removeValue(forKey: id.uuidString)
+            $0.unfinishedAnalysis.remove(id)
+            $0.pendingRecordings.remove(id)
+        }
+    }
     func receive(_ source: URL, recording: Recording) throws {
         guard recording.isPlayable, recording.duration.isFinite, recording.duration > 0,
               let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
             throw JournalError.invalidTransfer
         }
-        try recordingWrites.withLock {
-            if let previous = try? self.recording(recording.id), previous.rawDeletedAt != nil { return }
-            let destination = try folder(recording.id)
-            let audioURL = try audio(recording.id)
-            if files.fileExists(atPath: audioURL.path) {
-                try save(recording)
+        try change { index in
+            if let previous = try? self.recording(recording.id), previous.rawDeletedAt != nil {
+                try enqueuePurgeUnlocked(recording.id)
                 return
             }
+            let destination = try folder(recording.id)
+            let audioURL = try audio(recording.id)
+            if !files.fileExists(atPath: audioURL.path) {
+                let staging = try root().appendingPathComponent(".incoming-\(UUID().uuidString)")
+                try files.createDirectory(at: staging, withIntermediateDirectories: false)
+                defer { try? files.removeItem(at: staging) }
+                let stagedAudio = staging.appendingPathComponent(audioURL.lastPathComponent)
+                try files.copyItem(at: source, to: stagedAudio)
+                if files.fileExists(atPath: destination.path) {
+                    try files.moveItem(at: stagedAudio, to: audioURL)
+                } else {
+                    try JSONEncoder().encode(recording).write(to: staging.appendingPathComponent("recording.json"))
+                    try files.moveItem(at: staging, to: destination)
+                }
+            }
+            try write(recording, index: &index)
+        }
+    }
 
-            let staging = try root().appendingPathComponent(".incoming-\(UUID().uuidString)")
-            try files.createDirectory(at: staging, withIntermediateDirectories: false)
-            defer { try? files.removeItem(at: staging) }
-            let stagedAudio = staging.appendingPathComponent(audioURL.lastPathComponent)
-            try files.copyItem(at: source, to: stagedAudio)
-            if files.fileExists(atPath: destination.path) {
-                try files.moveItem(at: stagedAudio, to: audioURL)
-                try save(recording)
-            } else {
-                try JSONEncoder().encode(recording).write(to: staging.appendingPathComponent("recording.json"))
-                try files.moveItem(at: staging, to: destination)
+    func analysisURL(_ id: UUID) throws -> URL { try folder(id).appendingPathComponent("meeting-analysis.json") }
+    func saveAnalysis(_ data: Data, id: UUID, complete: Bool) throws {
+        try change {
+            try data.write(to: analysisURL(id), options: .atomic)
+            if complete { $0.unfinishedAnalysis.remove(id) } else { $0.unfinishedAnalysis.insert(id) }
+        }
+    }
+    private func dailyURL(_ day: JournalDayKey) throws -> URL {
+        let name = Data(day.id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
+        return try directory("Daily").appendingPathComponent(name).appendingPathExtension("json")
+    }
+    func daily(_ day: JournalDayKey) throws -> DailyJournalReport? {
+        let url = try dailyURL(day)
+        guard files.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(DailyJournalReport.self, from: Data(contentsOf: url))
+    }
+    func dailyReports(offset: Int = 0, limit: Int = .max) throws -> [DailyJournalReport] {
+        try state.lock.withLock {
+            try catalog().days.values.sorted { $0.day.id > $1.day.id }
+                .dropFirst(max(0, offset)).prefix(max(0, limit)).compactMap { try daily($0.day) }
+        }
+    }
+    func dailyKeys() throws -> [JournalDayKey] {
+        try state.lock.withLock { try catalog().days.values.map(\.day) }
+    }
+    func affectedHealthDays(_ ranges: [DateInterval]) throws -> Set<JournalDayKey> {
+        try state.lock.withLock {
+            Set(try catalog().days.values.filter { row in
+                let intervals = row.meetingRanges + [row.healthRange].compactMap { $0 }
+                return intervals.contains { interval in ranges.contains { HealthQueryRanges.overlaps(interval, $0) } }
+            }.map(\.day))
+        }
+    }
+    func saveDaily(_ report: DailyJournalReport) throws {
+        try change {
+            try JSONEncoder().encode(report).write(to: dailyURL(report.day), options: .atomic)
+            $0.days[report.id] = DailyIndex(report)
+            if DailyIndex(report).cleanupPending { $0.pendingCleanup.insert(report.day) }
+            else { $0.pendingCleanup.remove(report.day) }
+        }
+    }
+    func completeCleanup(_ day: JournalDayKey) throws {
+        guard var report = try daily(day), report.cleanupCompletedAt == nil, report.canPurge,
+              try report.meetings.allSatisfy({ try recording($0.id).rawDeletedAt != nil }) else { return }
+        report.cleanupCompletedAt = .now
+        try saveDaily(report)
+    }
+    /// Read committed report. Completion is recorded only after analysis checkpoints are compacted.
+    func purgeDaily(_ day: JournalDayKey) throws -> [UUID] {
+        guard let report = try daily(day) else { throw JournalError.invalidTransfer }
+        guard report.day == day, day.hasEnded(), report.canPurge, report.cleanupCompletedAt == nil else { return [] }
+        var changed: [UUID] = []
+        for meeting in report.meetings {
+            if try purgeRaw(meeting.id) { changed.append(meeting.id) }
+        }
+        return changed
+    }
+    @discardableResult
+    func purgeRaw(_ id: UUID) throws -> Bool {
+        try state.lock.withLock {
+            guard var entry = try? recording(id) else { return false }
+            let url = try audio(id)
+            let hasAudio = files.fileExists(atPath: url.path)
+            guard entry.rawDeletedAt == nil || hasAudio else { return false }
+            return try change { index in
+                // Pending notification exists before deletion; a crash can only cause a duplicate, never a lost purge.
+                try enqueuePurgeUnlocked(id)
+                if entry.rawDeletedAt == nil {
+                    entry.rawDeletedAt = .now
+                    try write(entry, index: &index)
+                }
+                if hasAudio { try files.removeItem(at: url) }
+                return true
             }
         }
     }
-
-    func analysisURL(_ id: UUID) throws -> URL {
-        try folder(id).appendingPathComponent("meeting-analysis.json")
+    private func enqueuePurgeUnlocked(_ id: UUID) throws {
+        let url = try directory("PendingPurge").appendingPathComponent(id.uuidString)
+        if !files.fileExists(atPath: url.path) { try Data().write(to: url, options: .atomic) }
     }
-
-    private func dailyFolder() throws -> URL {
-        let url = try root().appendingPathComponent("Daily", isDirectory: true)
-        try files.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    private func dailyURL(_ day: JournalDayKey) throws -> URL {
-        // Encode the full key so time zones containing "/" never create subdirectories.
-        let name = Data(day.id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
-        return try dailyFolder().appendingPathComponent(name).appendingPathExtension("json")
-    }
-
-    func dailyReports() throws -> [DailyJournalReport] {
-        try files.contentsOfDirectory(at: dailyFolder(), includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "json" }
-            .map { try JSONDecoder().decode(DailyJournalReport.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.day.localDate > $1.day.localDate }
-    }
-
-    func saveDaily(_ report: DailyJournalReport) throws {
-        try JSONEncoder().encode(report).write(to: dailyURL(report.day), options: .atomic)
-    }
-
-    /// Must read the committed report, never trust a transient in-memory result.
-    func purgeDaily(_ day: JournalDayKey) throws -> [UUID] {
-        let report = try JSONDecoder().decode(DailyJournalReport.self, from: Data(contentsOf: dailyURL(day)))
-        guard report.day == day, day.hasEnded(), report.canPurge else { return [] }
-        var ids: [UUID] = []
-        for meeting in report.meetings {
-            try purgeRaw(meeting.id)
-            ids.append(meeting.id)
-        }
-        return ids
-    }
-
-    func purgeRaw(_ id: UUID) throws {
-        try recordingWrites.withLock {
-            guard var entry = try? recording(id) else { return }
-            entry.rawDeletedAt = entry.rawDeletedAt ?? .now
-            // Write the tombstone first; retrying also removes an audio file left by a crash.
-            try save(entry)
-            let url = try audio(id)
-            if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+    func pendingPurgeIDs() throws -> [UUID] {
+        try state.lock.withLock {
+            _ = try catalog()
+            return try files.contentsOfDirectory(at: directory("PendingPurge"), includingPropertiesForKeys: nil)
+                .compactMap { UUID(uuidString: $0.lastPathComponent) }.sorted { $0.uuidString < $1.uuidString }
         }
     }
-
+    func acknowledgePurge(_ ids: [UUID]) throws {
+        try state.lock.withLock {
+            for id in ids {
+                let url = try directory("PendingPurge").appendingPathComponent(id.uuidString)
+                if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+            }
+        }
+    }
     func purgedIDs() throws -> [UUID] {
-        try list().filter { $0.rawDeletedAt != nil }.map(\.id)
+        try state.lock.withLock { try catalog().recordings.values.filter(\.rawDeleted).map(\.id) }
     }
 
     func report() throws -> HealthReport? {
-        let url = try root().appendingPathComponent("health.json")
+        let url = try localStateURL("health.json")
         guard files.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(HealthReport.self, from: Data(contentsOf: url))
     }
-
     func saveReport(_ report: HealthReport) throws {
-        let url = try root().appendingPathComponent("health.json")
-        try JSONEncoder().encode(report).write(to: url, options: .atomic)
+        try JSONEncoder().encode(report).write(to: localStateURL("health.json"), options: .atomic)
     }
-
-    func deleteReport() throws {
-        let url = try root().appendingPathComponent("health.json")
-        try files.removeItem(at: url)
-    }
-
+    func deleteReport() throws { try files.removeItem(at: localStateURL("health.json")) }
     func outgoingReport(_ report: HealthReport) throws -> URL {
-        let directory = try root().appendingPathComponent("Outgoing", isDirectory: true)
-        try files.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("\(UUID().uuidString).json")
+        let url = try directory("Outgoing").appendingPathComponent("\(UUID().uuidString).json")
         try JSONEncoder().encode(report).write(to: url, options: .atomic)
         return url
     }
-
     func cleanOutgoingReports(keeping active: Set<URL>) throws {
-        let directory = try root().appendingPathComponent("Outgoing", isDirectory: true)
-        guard files.fileExists(atPath: directory.path) else { return }
-        for file in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
-            if !active.contains(file.standardizedFileURL) { try files.removeItem(at: file) }
-        }
+        for file in try files.contentsOfDirectory(at: directory("Outgoing"), includingPropertiesForKeys: nil)
+            where !active.contains(file.standardizedFileURL) { try files.removeItem(at: file) }
     }
 }
