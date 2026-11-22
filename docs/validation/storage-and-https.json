@@ -1,0 +1,25 @@
+{
+  "scenario": "storage-modes",
+  "cloudAcknowledgmentEvictsLocal": true,
+  "healthExcludedFromCloud": true,
+  "phoneAcknowledgmentEvictsWatch": true,
+  "lateCloudMeetingMergesWithCleanedWatchDay": true,
+  "passed": true,
+  "cloudTransport": "Debug local fixture",
+  "purgedCloudDoesNotRevive": true,
+  "cloudFailureRetainsOriginal": true,
+  "cloudImportIdempotent": true,
+  "httpsTransport": "Network.framework TLS loopback",
+  "https": {
+    "certificateAndIPVerified": true,
+    "systemTrustRejectsUnknownCertificate": true,
+    "unauthorized401": true,
+    "hostMismatch400": true,
+    "ticketReplay403": true,
+    "downloadSHA256Matches": true,
+    "downloadBytes": 196731,
+    "authenticatedActivityExtendsLease": true,
+    "unauthorizedActivityDoesNotExtendLease": true,
+    "idleTimeoutClosesListener": true
+  }
+}

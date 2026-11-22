@@ -17,9 +17,9 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         case updated
         case message(String)
         #if os(watchOS)
-        case ready, sync(Set<UUID>, [UUID]), received(UUID), purge([UUID])
+        case ready, sync(Set<UUID>, [UUID], Bool), received(UUID), purge([UUID])
         #else
-        case ready, purgeAcknowledged([UUID])
+        case ready, cloudAvailable, purgeAcknowledged([UUID])
         #endif
     }
 
@@ -42,7 +42,13 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
     var storage: RecordingStorage {
         let raw = WCSession.isSupported()
             ? WCSession.default.receivedApplicationContext[RecordingStorage.settingsKey] as? String : nil
-        return raw.flatMap(RecordingStorage.init(rawValue:)) ?? .automatic
+        return RecordingStorage.preference(raw)
+    }
+    var batchMinutes: Int { StoragePolicy.batchMinutes(WCSession.default.receivedApplicationContext["batchMinutes"] as? Int) }
+    func notifyCloudAvailable() throws {
+        let session = try activeSession()
+        guard !session.outstandingUserInfoTransfers.contains(where: { $0.userInfo[Key.kind] as? String == "cloud-available" }) else { return }
+        session.transferUserInfo([Key.kind: "cloud-available"])
     }
     var transferChargingOnly: Bool {
         WCSession.default.receivedApplicationContext["transferChargingOnly"] as? Bool ?? false
@@ -107,7 +113,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         case Key.sync:
             let purged = (info["purged"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
             let ids = (info["known"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
-            onEvent(.sync(Set(ids), purged))
+            onEvent(.sync(Set(ids), purged, info["endedOnly"] as? Bool ?? false))
         case Key.purge:
             onEvent(.purge((info["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:))))
         case Key.receipt:
@@ -145,14 +151,16 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         context[RecordingStorage.settingsKey] = storage.rawValue
         context["transferChargingOnly"] = settings.transferChargingOnly ?? false
         context["collectionMode"] = (settings.collectionMode ?? .system).rawValue
+        context["batchMinutes"] = StoragePolicy.batchMinutes(settings.batchMinutes)
+        context["localAccessMinutes"] = StoragePolicy.idleMinutes(settings.localAccessMinutes)
         guard !NSDictionary(dictionary: context).isEqual(to: session.applicationContext) else { return }
         try session.updateApplicationContext(context)
     }
 
-    func syncRecordings(known: [UUID], purged: [UUID]) throws -> Bool {
+    func syncRecordings(known: [UUID], purged: [UUID], endedOnly: Bool = false) throws -> Bool {
         let session = try watchSession()
         let request: [String: Any] = [Key.kind: Key.sync, "known": known.map(\.uuidString),
-                                     "purged": purged.prefix(500).map(\.uuidString)]
+                                     "purged": purged.prefix(500).map(\.uuidString), "endedOnly": endedOnly]
         try purgeRecordings(Array(purged.dropFirst(500)))
         if session.isReachable {
             session.sendMessage(request, replyHandler: { _ in }, errorHandler: { [weak self] _ in
@@ -160,12 +168,18 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
                     self?.onEvent(.message(JournalError.watchUnavailable.localizedDescription))
                     return
                 }
-                session.transferUserInfo(request)
+                self?.enqueueSync(request, session: session)
             })
             return true
         }
-        session.transferUserInfo(request)
+        enqueueSync(request, session: session)
         return false
+    }
+    private func enqueueSync(_ request: [String: Any], session: WCSession) {
+        guard !session.outstandingUserInfoTransfers.contains(where: {
+            $0.userInfo[Key.kind] as? String == Key.sync && NSDictionary(dictionary: $0.userInfo).isEqual(to: request)
+        }) else { return }
+        session.transferUserInfo(request)
     }
 
     func purgeRecordings(_ ids: [UUID]) throws {
@@ -203,6 +217,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
 
     #if os(iOS)
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        if userInfo[Key.kind] as? String == "cloud-available" { onEvent(.cloudAvailable) }
         if userInfo[Key.kind] as? String == Key.purgeAck {
             onEvent(.purgeAcknowledged((userInfo["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:))))
         }

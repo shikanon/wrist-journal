@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>JournalCloudContainer</key><string>iCloud.io.github.shikanon.wristjournal</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>录制你主动开始的会议或手记。录音先保存在手表，可以同步到配对的 iPhone。</string>
     <key>NSLocationWhenInUseUsageDescription</key>

@@ -15,8 +15,11 @@ struct Recording: Codable, Identifiable, Sendable {
     var timeZoneIdentifier: String?
     var rawDeletedAt: Date?
     var motionWindows: [ActivityWindow]?
+    var cloudUploadedAt: Date?
+    var localEvictedAt: Date?
 
-    var isPlayable: Bool { rawDeletedAt == nil && (state == .saved || state == .interrupted) }
+    var isPlayable: Bool { rawDeletedAt == nil && localEvictedAt == nil && (state == .saved || state == .interrupted) }
+    var needsLocalProcessing: Bool { rawDeletedAt == nil && !(storage == .phone && localEvictedAt != nil) }
 
     var title: String {
         note.isEmpty ? startedAt.formatted(date: .abbreviated, time: .shortened) : note
@@ -24,22 +27,27 @@ struct Recording: Codable, Identifiable, Sendable {
 }
 
 enum RecordingStorage: String, Codable, CaseIterable, Identifiable, Sendable {
-    case automatic, watch, phone
+    case automatic, watch, phone, cloud
 
     static let settingsKey = "recordingStorage"
+    static var allCases: [Self] { [.watch, .phone, .cloud] }
+    static func preference(_ raw: String?) -> Self {
+        guard let raw, let value = Self(rawValue: raw), value != .automatic else { return .watch }
+        return value
+    }
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .automatic: "自动"
-        case .watch: "保留在手表"
-        case .phone: "优先存到 iPhone"
+        case .automatic, .watch: "优先手表（省电）"
+        case .phone: "优先手机（省手表空间）"
+        case .cloud: "优先云端"
         }
     }
 
     func destination(free: Int64?, capacity: Int64?) -> Self {
         guard self == .automatic else { return self }
-        return .phone
+        return .watch
     }
 }
 

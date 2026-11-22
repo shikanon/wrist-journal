@@ -1,13 +1,13 @@
 {
-  "meetingCount": 1,
-  "scenario": "backup-failure",
-  "damagedDayRetained": false,
-  "healthDayCount": 7,
-  "passed": true,
   "eventCount": 1,
-  "originalExists": true,
-  "minutesPreserved": true,
-  "weeklyMonthlyVerified": true,
+  "scenario": "backup-failure",
+  "healthDayCount": 7,
+  "damagedDayRetained": false,
   "backupCooldownVerified": true,
-  "legacyBackupRetried": true
+  "meetingCount": 1,
+  "originalExists": true,
+  "legacyBackupRetried": true,
+  "passed": true,
+  "minutesPreserved": true,
+  "weeklyMonthlyVerified": true
 }

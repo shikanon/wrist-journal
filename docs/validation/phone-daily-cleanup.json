@@ -1,13 +1,13 @@
 {
-  "minutesPreserved": true,
-  "meetingCount": 1,
-  "damagedDayRetained": true,
-  "legacyBackupRetried": false,
   "scenario": "daily-cleanup",
-  "originalExists": false,
   "eventCount": 1,
-  "backupCooldownVerified": false,
+  "healthDayCount": 7,
+  "damagedDayRetained": true,
+  "minutesPreserved": true,
   "weeklyMonthlyVerified": true,
-  "passed": true,
-  "healthDayCount": 7
+  "meetingCount": 1,
+  "backupCooldownVerified": false,
+  "legacyBackupRetried": false,
+  "originalExists": false,
+  "passed": true
 }

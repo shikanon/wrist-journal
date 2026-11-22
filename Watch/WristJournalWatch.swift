@@ -29,13 +29,40 @@ private final class WatchApplicationDelegate: NSObject, WKApplicationDelegate {
     let journal = WatchJournal()
     private var tasks: [WKWatchConnectivityRefreshBackgroundTask] = []
     private var observations: [NSKeyValueObservation] = []
+    private var storageTasks: [ObjectIdentifier: (WKRefreshBackgroundTask, Task<Void, Never>)] = [:]
 
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
         for task in backgroundTasks {
             if let task = task as? WKWatchConnectivityRefreshBackgroundTask {
                 tasks.append(task)
+                task.expirationHandler = { [weak self, weak task] in
+                    Task { @MainActor in
+                        guard let self, let task else { return }
+                        self.journal.pauseBackgroundStorage()
+                        if let index = self.tasks.firstIndex(where: { $0 === task }) {
+                            self.tasks.remove(at: index)
+                            task.expirationHandler = nil
+                            task.setTaskCompletedWithSnapshot(false)
+                        }
+                    }
+                }
+            } else if task is WKApplicationRefreshBackgroundTask {
+                let id = ObjectIdentifier(task)
+                let run = Task {
+                    await journal.refreshStorageInBackground()
+                    finishStorageTask(id)
+                }
+                storageTasks[id] = (task, run)
+                task.expirationHandler = { [weak self] in
+                    Task { @MainActor in
+                        self?.journal.pauseBackgroundStorage()
+                        self?.storageTasks[id]?.1.cancel()
+                        self?.finishStorageTask(id)
+                    }
+                }
+            } else if let snapshot = task as? WKSnapshotRefreshBackgroundTask {
+                snapshot.setTaskCompleted(restoredDefaultState: true, estimatedSnapshotExpiration: .distantFuture, userInfo: nil)
             } else {
-                journal.checkRecording()
                 task.setTaskCompletedWithSnapshot(false)
             }
         }
@@ -51,11 +78,24 @@ private final class WatchApplicationDelegate: NSObject, WKApplicationDelegate {
         Task { @MainActor in completeConnectivityTasks() }
     }
 
+    private func finishStorageTask(_ id: ObjectIdentifier) {
+        guard let (task, _) = storageTasks.removeValue(forKey: id) else { return }
+        task.expirationHandler = nil
+        task.setTaskCompletedWithSnapshot(false)
+    }
+
     private func completeConnectivityTasks() {
         guard WCSession.default.activationState == .activated, !WCSession.default.hasContentPending else { return }
-        for task in tasks { task.setTaskCompletedWithSnapshot(false) }
-        tasks.removeAll()
-        observations.removeAll()
+        Task {
+            await journal.waitForCloudStorage()
+            guard !WCSession.default.hasContentPending else { return }
+            for task in tasks {
+                task.expirationHandler = nil
+                task.setTaskCompletedWithSnapshot(false)
+            }
+            tasks.removeAll()
+            observations.removeAll()
+        }
     }
 }
 
@@ -130,6 +170,8 @@ private struct WatchLibrary: View {
                 }
             }
             Section("录音") {
+                Text(journal.transfer.storage.title).font(.caption)
+                if let status = journal.storageStatus { Text(status).font(.caption2).foregroundStyle(.secondary) }
                 if journal.recordings.isEmpty {
                     Text("暂无录音").foregroundStyle(.secondary)
                 }
@@ -139,7 +181,8 @@ private struct WatchLibrary: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry.title).lineLimit(1)
-                            Text(entry.isPlayable ? durationText(entry.duration) : "文件无法播放")
+                            Text(entry.cloudUploadedAt != nil && entry.localEvictedAt != nil ? "已存云端，等待手机分析" :
+                                    (entry.isPlayable ? durationText(entry.duration) : "文件无法播放"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if entry.isPlayable, entry.storage == .phone {

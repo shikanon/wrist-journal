@@ -14,6 +14,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published private(set) var collectLocation = UserDefaults.standard.bool(forKey: "collectMeetingLocation")
     @Published private(set) var collectionMode = CollectionMode.system
     @Published private(set) var collectionStatus: String?
+    @Published private(set) var storageStatus: String?
 
     let store: JournalStore
     private let health = HealthReader()
@@ -27,7 +28,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }()
     private var locating: UUID?
     private var locationDeadline: Task<Void, Never>?
-    private var deferredKnown: Set<UUID>?
+    private let cloudStorage = WatchCloudStorage()
+    private var nextStorageRefresh: Date?
     private var deferredPurges: Set<UUID> = []
     private lazy var precise = PreciseCollection { [weak self] text in self?.collectionStatus = text }
 
@@ -39,9 +41,13 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             case .ready:
                 if self.current == nil { self.collectionMode = self.transfer.collectionMode }
                 self.queueRecordings()
-            case .sync(let known, let purged):
+            case .sync(let known, let purged, let endedOnly):
                 self.purge(purged)
-                self.queueRecordings(known: known)
+                var state = StorageWorkState.load(self.store)
+                // Preserve a queued manual request when an automatic request arrives later.
+                state.request = StorageSyncRequest(known: known, endedOnly: endedOnly && (state.request?.endedOnly ?? true))
+                do { try state.save(self.store); self.queueRecordings() }
+                catch { self.message = error.localizedDescription }
             case .received(let id): self.confirmPhoneStorage(id)
             case .purge(let ids):
                 self.purge(ids)
@@ -60,6 +66,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
                 guard !FileManager.default.fileExists(atPath: try store.audio(id).path) else { continue }
                 acknowledged.append(id)
                 try store.acknowledgePurge([id])
+                try store.acknowledgeCloudCompletion(id)
             } catch { message = error.localizedDescription }
         }
         deferredPurges.formUnion(ids.filter { current?.id == $0 })
@@ -95,6 +102,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         let result = URL.applicationSupportDirectory.appendingPathComponent("WristJournalWatchUITests/simulation-result.json")
         var evidence: [String: Any]
         do {
+            try store.recoverEvictions()
             await start()
             guard current == nil, !starting, message == JournalError.microphoneDenied.localizedDescription else {
                 finish()
@@ -128,6 +136,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     private func reload() {
         do {
+            try store.recoverEvictions()
             for id in try store.pendingPurgeIDs() {
                 if FileManager.default.fileExists(atPath: try store.audio(id).path) { try store.purgeRaw(id) }
                 try store.acknowledgePurge([id])
@@ -136,7 +145,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             recordings = try entries.map { entry in
                 guard entry.state == .recording, current?.id != entry.id else { return entry }
                 return try finalize(entry, interrupted: true)
-            }.filter { $0.state != .recording && $0.rawDeletedAt == nil }
+            }.filter { $0.state != .recording && $0.rawDeletedAt == nil && !($0.storage == .phone && $0.localEvictedAt != nil) }
             report = try store.report()
         } catch {
             message = error.localizedDescription
@@ -153,6 +162,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         do {
             guard await AVAudioApplication.requestRecordPermission() else { throw JournalError.microphoneDenied }
             transfer.pauseFileTransfers()
+            cloudStorage.pause()
             let space = try store.availableStorage()
             if let free = space.free, free < 16 * 1024 * 1024 { throw JournalError.storageFull }
             try session.setCategory(.record)
@@ -190,6 +200,16 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             finish(interrupted: true)
         }
         queueRecordings()
+    }
+    func refreshStorageInBackground() async {
+        nextStorageRefresh = nil
+        checkRecording()
+        await cloudStorage.waitForCompletion()
+    }
+    func waitForCloudStorage() async { await cloudStorage.waitForCompletion() }
+    func pauseBackgroundStorage() {
+        cloudStorage.pause()
+        scheduleStorage(at: .now.addingTimeInterval(900))
     }
 
     func setCollectLocation(_ enabled: Bool) {
@@ -269,33 +289,74 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         }
     }
 
-    private func queueRecordings(known: Set<UUID>? = nil) {
-        if let known { deferredKnown = known }
+    private func queueRecordings() {
         let device = WKInterfaceDevice.current()
         device.isBatteryMonitoringEnabled = true
         guard TransferPolicy.allowsAutomatic(recording: current != nil || starting,
             chargingOnly: transfer.transferChargingOnly, charging: [.charging, .full].contains(device.batteryState)) else {
             if transfer.transferChargingOnly, current == nil, !recordings.isEmpty {
-                WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: .now.addingTimeInterval(1800),
-                    userInfo: nil) { _ in }
+                scheduleStorage(at: .now.addingTimeInterval(1800))
             }
             return
         }
-        let known = deferredKnown
-        deferredKnown = nil
+        var state = StorageWorkState.load(store)
+        let request = state.request
+        let due = StoragePolicy.batchDue(last: state.lastBatch, minutes: transfer.batchMinutes)
+        var queuedPhone = false
+        var failed = false
         for entry in recordings where entry.isPlayable {
-            if known?.contains(entry.id) == true {
+            if request?.known.contains(entry.id) == true {
                 if entry.storage == .phone { confirmPhoneStorage(entry.id) }
                 continue
             }
-            if known != nil || entry.storage == .phone { _ = try? transfer.send(entry) }
+            guard StoragePolicy.shouldSend(entry, requested: request != nil, endedOnly: request?.endedOnly ?? false,
+                                            batchDue: due, recording: false) else { continue }
+            do {
+                _ = try transfer.send(entry)
+                queuedPhone = queuedPhone || entry.storage == .phone
+            } catch { failed = true; storageStatus = error.localizedDescription }
         }
+        if queuedPhone { state.lastBatch = .now }
+        if !failed { state.request = nil }
+        try? state.save(store)
+        let hasPhone = recordings.contains { $0.storage == .phone && $0.isPlayable }
+        if hasPhone || failed {
+            let next = failed ? Date.now.addingTimeInterval(900) :
+                (state.lastBatch ?? .now).addingTimeInterval(Double(transfer.batchMinutes) * 60)
+            scheduleStorage(at: max(next, .now.addingTimeInterval(60)))
+        }
+        if recordings.contains(where: { $0.storage == .cloud && $0.isPlayable }) {
+            cloudStorage.run(store: store) { [weak self] status, retry in
+                guard let self else { return }
+                self.storageStatus = status ?? "云端保存已确认"
+                self.reload()
+                if let retry { self.scheduleStorage(at: retry) }
+                self.notifyCloudIfNeeded()
+            }
+        } else { notifyCloudIfNeeded() }
+    }
+
+    private func notifyCloudIfNeeded() {
+        var state = StorageWorkState.load(store)
+        guard let latest = recordings.compactMap(\.cloudUploadedAt).max(),
+              latest > (state.lastCloudNoticeAt ?? .distantPast) else { return }
+        do {
+            try transfer.notifyCloudAvailable()
+            state.lastCloudNoticeAt = latest
+            try state.save(store)
+        } catch { scheduleStorage(at: .now.addingTimeInterval(900)) }
+    }
+
+    private func scheduleStorage(at date: Date) {
+        if let existing = nextStorageRefresh, existing > .now, existing <= date { return }
+        nextStorageRefresh = date
+        WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: date, userInfo: nil) { _ in }
     }
 
     private func confirmPhoneStorage(_ id: UUID) {
         guard let entry = recordings.first(where: { $0.id == id }), entry.storage == .phone else { return }
         do {
-            try store.delete(id)
+            try store.evictLocal(id)
             reload()
         } catch {
             message = error.localizedDescription
@@ -345,7 +406,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     @discardableResult
     func delete(_ entry: Recording) -> Bool {
-        if transfer.isQueued(entry.id) {
+        if transfer.isQueued(entry.id) || (entry.storage == .cloud && cloudStorage.uploading) {
             message = "录音正在传输。传输结束后可删除。"
             return false
         }

@@ -94,7 +94,7 @@ struct JournalStore {
             guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
             let entry = try recording(id)
             rebuilt.recordings[id.uuidString] = RecordingIndex(entry)
-            if entry.rawDeletedAt == nil { rebuilt.pendingRecordings.insert(id) }
+            if entry.needsLocalProcessing { rebuilt.pendingRecordings.insert(id) }
             if let data = try? Data(contentsOf: analysisURL(id)),
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                object["state"] as? String != "complete" { rebuilt.unfinishedAnalysis.insert(id) }
@@ -167,7 +167,7 @@ struct JournalStore {
         try files.createDirectory(at: url, withIntermediateDirectories: true)
         try JSONEncoder().encode(entry).write(to: url.appendingPathComponent("recording.json"), options: .atomic)
         index.recordings[entry.id.uuidString] = RecordingIndex(entry)
-        if entry.rawDeletedAt == nil { index.pendingRecordings.insert(entry.id) }
+        if entry.needsLocalProcessing { index.pendingRecordings.insert(entry.id) }
         else { index.pendingRecordings.remove(entry.id) }
     }
     func save(_ recording: Recording) throws { try change { try write(recording, index: &$0) } }
@@ -180,14 +180,20 @@ struct JournalStore {
         }
     }
     func receive(_ source: URL, recording: Recording) throws {
+        var recording = recording
+        recording.localEvictedAt = nil
         guard recording.isPlayable, recording.duration.isFinite, recording.duration > 0,
               let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
             throw JournalError.invalidTransfer
         }
         try change { index in
-            if let previous = try? self.recording(recording.id), previous.rawDeletedAt != nil {
-                try enqueuePurgeUnlocked(recording.id)
-                return
+            if let previous = try? self.recording(recording.id) {
+                if previous.rawDeletedAt != nil {
+                    try enqueuePurgeUnlocked(recording.id)
+                    return
+                }
+                recording.cloudUploadedAt = previous.cloudUploadedAt ?? recording.cloudUploadedAt
+                recording.motionWindows = previous.motionWindows ?? recording.motionWindows
             }
             let destination = try folder(recording.id)
             let audioURL = try audio(recording.id)
@@ -208,6 +214,53 @@ struct JournalStore {
         }
     }
 
+    /// Persist the remote acknowledgment and unlink intent before releasing the local copy.
+    func evictLocal(_ id: UUID, cloudConfirmedAt: Date? = nil) throws {
+        try state.lock.withLock {
+            var entry = try recording(id)
+            guard entry.rawDeletedAt == nil else { return }
+            if let cloudConfirmedAt { entry.cloudUploadedAt = cloudConfirmedAt }
+            guard entry.storage == .phone || entry.cloudUploadedAt != nil else { throw JournalError.invalidTransfer }
+            let intent = try directory("PendingEviction").appendingPathComponent(id.uuidString)
+            try Data().write(to: intent, options: .atomic)
+            entry.localEvictedAt = .now
+            try save(entry)
+            try finishEviction(id)
+        }
+    }
+    private func finishEviction(_ id: UUID) throws {
+        let intent = try directory("PendingEviction").appendingPathComponent(id.uuidString)
+        guard files.fileExists(atPath: try folder(id).path) else {
+            try files.removeItem(at: intent)
+            return
+        }
+        let entry = try recording(id)
+        // An intent without a committed acknowledgment must never delete audio.
+        if entry.localEvictedAt != nil {
+            let url = try audio(id)
+            if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+        }
+        try files.removeItem(at: intent)
+    }
+    func recoverEvictions() throws {
+        try state.lock.withLock {
+            for url in try files.contentsOfDirectory(at: directory("PendingEviction"), includingPropertiesForKeys: nil) {
+                if let id = UUID(uuidString: url.lastPathComponent) { try finishEviction(id) }
+            }
+        }
+    }
+    func pendingCloudCompletionIDs() throws -> [UUID] {
+        try state.lock.withLock {
+            try files.contentsOfDirectory(at: directory("PendingCloudCompletion"), includingPropertiesForKeys: nil)
+                .compactMap { UUID(uuidString: $0.lastPathComponent) }
+        }
+    }
+    func acknowledgeCloudCompletion(_ id: UUID) throws {
+        try state.lock.withLock {
+            let url = try directory("PendingCloudCompletion").appendingPathComponent(id.uuidString)
+            if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+        }
+    }
     func analysisURL(_ id: UUID) throws -> URL { try folder(id).appendingPathComponent("meeting-analysis.json") }
     func saveAnalysis(_ data: Data, id: UUID, complete: Bool) throws {
         try change {
@@ -275,6 +328,9 @@ struct JournalStore {
             return try change { index in
                 // Pending notification exists before deletion; a crash can only cause a duplicate, never a lost purge.
                 try enqueuePurgeUnlocked(id)
+                if entry.storage == .cloud {
+                    try Data().write(to: directory("PendingCloudCompletion").appendingPathComponent(id.uuidString), options: .atomic)
+                }
                 if entry.rawDeletedAt == nil {
                     entry.rawDeletedAt = .now
                     try write(entry, index: &index)

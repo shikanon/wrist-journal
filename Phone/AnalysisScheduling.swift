@@ -39,7 +39,7 @@ enum AnalysisScheduling {
         registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
             guard let task = task as? BGProcessingTask else { task.setTaskCompleted(success: false); return }
             Task { @MainActor in
-                let run = Task { await journal.processDays(automatic: true) }
+                let run = Task { await journal.scheduledWork() }
                 task.expirationHandler = { run.cancel() }
                 let success = await run.value
                 task.setTaskCompleted(success: success)
@@ -51,9 +51,8 @@ enum AnalysisScheduling {
     static func schedule(settings: DailySettings) {
         guard registered else { return }
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
-        guard settings.automatic || settings.healthEnabled else { return }
         let request = BGProcessingTaskRequest(identifier: identifier)
-        request.requiresExternalPower = settings.chargingOnly
+        request.requiresExternalPower = false
         // Local health work must be eligible even without a network.
         request.requiresNetworkConnectivity = false
         request.earliestBeginDate = Calendar.current.date(byAdding: .day, value: 1,

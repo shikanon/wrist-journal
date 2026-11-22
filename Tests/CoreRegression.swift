@@ -117,7 +117,7 @@ enum CoreRegression {
         let legacy = #"{"id":"00000000-0000-0000-0000-000000000001","startedAt":0,"duration":10,"state":"saved","note":""}"#
         let old = try JSONDecoder().decode(Recording.self, from: Data(legacy.utf8))
         try check(old.isPlayable && old.timeZoneIdentifier == nil && old.rawDeletedAt == nil, "old recordings decode")
-        try check(RecordingStorage.automatic.destination(free: nil, capacity: nil) == .phone, "automatic storage favors phone")
+        try check(RecordingStorage.automatic.destination(free: nil, capacity: nil) == .watch, "legacy automatic storage favors watch")
         var retry = RetryState()
         retry.fail(configuration: "key-a", authentication: false, now: start)
         try check(!retry.allows(configuration: "key-a", now: start.addingTimeInterval(59)), "retry cooling survives foreground reentry")
@@ -169,5 +169,65 @@ enum CoreRegression {
         try check(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".catalog-dirty").path),
                   "catalog recovery clears dirty marker")
         print("PASS: \(checks) core regression checks")
+        try check(RecordingStorage.preference(nil) == .watch && RecordingStorage.preference("automatic") == .watch,
+                  "new and legacy automatic preferences default to watch")
+        try check(RecordingStorage.preference("phone") == .phone && RecordingStorage.allCases == [.watch, .phone, .cloud],
+                  "explicit preference and three choices preserved")
+        var staged = Recording(id: UUID(), startedAt: start, duration: 120, state: .saved, storage: .watch)
+        try check(!StoragePolicy.shouldSend(staged, requested: false, endedOnly: false, batchDue: true, recording: false),
+                  "watch priority waits for phone request")
+        staged.storage = .phone
+        try check(!StoragePolicy.shouldSend(staged, requested: false, endedOnly: false, batchDue: false, recording: false),
+                  "phone priority batches recordings")
+        try check(StoragePolicy.shouldSend(staged, requested: false, endedOnly: false, batchDue: true, recording: false),
+                  "phone priority transfers when batch due")
+        try check(!StoragePolicy.shouldSend(staged, requested: true, endedOnly: false, batchDue: true, recording: true),
+                  "manual request cannot interrupt recording")
+        try check(!StoragePolicy.batchDue(last: start, minutes: 60, now: start.addingTimeInterval(3599)) &&
+                   StoragePolicy.batchDue(last: start, minutes: 60, now: start.addingTimeInterval(3600)), "batch deadline")
+        staged.storage = .cloud
+        try store.receive(source, recording: staged)
+        do { try store.evictLocal(staged.id); fatalError("Unconfirmed cloud eviction") } catch { checks += 1 }
+        try check(FileManager.default.fileExists(atPath: try store.audio(staged.id).path), "cloud failure retains original")
+        try store.evictLocal(staged.id, cloudConfirmedAt: start)
+        let remote = try store.recording(staged.id)
+        try check(remote.cloudUploadedAt == start && remote.localEvictedAt != nil && remote.rawDeletedAt == nil,
+                  "cloud eviction distinct from final purge")
+        try check(!remote.isPlayable && !FileManager.default.fileExists(atPath: try store.audio(staged.id).path),
+                  "cloud acknowledgement releases watch bytes")
+        let evictions = root.appendingPathComponent("PendingEviction")
+        try Data().write(to: evictions.appendingPathComponent(staged.id.uuidString))
+        try Data([7]).write(to: store.audio(staged.id))
+        try JournalStore(root: root).recoverEvictions()
+        try check(!FileManager.default.fileExists(atPath: try store.audio(staged.id).path), "restart finishes committed eviction")
+        try store.receive(source, recording: remote)
+        try store.receive(source, recording: remote)
+        try check(try store.recording(staged.id).isPlayable, "cloud import clears local eviction idempotently")
+        try store.receive(source, recording: staged)
+        try check(try store.recording(staged.id).cloudUploadedAt == start, "late watch metadata preserves cloud acknowledgment")
+        try store.purgeRaw(staged.id)
+        try check(try store.pendingCloudCompletionIDs().contains(staged.id), "cloud completion queued before final cleanup")
+        try store.receive(source, recording: remote)
+        try check(!FileManager.default.fileExists(atPath: try store.audio(staged.id).path), "cloud download cannot revive purged audio")
+        var lease = LocalAccessLease(timeout: 600, now: 10)
+        try check(!lease.expired(at: 609) && lease.touch(at: 609) && lease.deadline == 1209, "authenticated activity extends idle lease")
+        try check(!lease.touch(at: 1209) && lease.expired(at: 1209), "expired lease cannot revive")
+        let valid = Data("GET /api/recordings HTTP/1.1\r\nHost: 127.0.0.1:1234\r\nAuthorization: Bearer secret\r\n\r\n".utf8)
+        try check(LocalHTTPRequest(valid, host: "127.0.0.1:1234")?.authorized(token: "secret") == true, "HTTP bearer authorization")
+        try check(LocalHTTPRequest(valid, host: "evil.test") == nil, "Host mismatch rejected")
+        try check(LocalHTTPRequest(valid, host: "127.0.0.1:1234")?.authorized(token: "wrong") == false, "invalid bearer rejected")
+        let duplicate = Data("GET / HTTP/1.1\r\nHost: a\r\nHost: a\r\n\r\n".utf8)
+        try check(LocalHTTPRequest(duplicate, host: "a") == nil, "duplicate headers rejected")
+        let phoneCopy = Recording(id: UUID(), startedAt: start, duration: 120, state: .saved, storage: .phone)
+        try store.receive(source, recording: phoneCopy)
+        try store.evictLocal(phoneCopy.id)
+        try check(try !store.pendingRecordings().contains { $0.id == phoneCopy.id }, "acknowledged phone copy leaves watch work index")
+        var savedWork = StorageWorkState()
+        savedWork.request = StorageSyncRequest(known: [UUID()], endedOnly: true)
+        savedWork.lastBatch = start
+        try savedWork.save(store)
+        let resumedWork = StorageWorkState.load(JournalStore(root: root))
+        try check(resumedWork.request?.endedOnly == true && resumedWork.lastBatch == start, "pending request and batch survive restart")
+        print("PASS: \(checks) total core and storage regression checks")
     }
 }

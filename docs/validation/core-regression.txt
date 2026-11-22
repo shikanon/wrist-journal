@@ -1,1 +1,2 @@
 PASS: 60 core regression checks
+PASS: 84 total core and storage regression checks

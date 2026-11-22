@@ -6,6 +6,22 @@
 	};
 	objectVersion = 56;
 	objects = {
+		C1000000000000000000000F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSimulation.swift; sourceTree = "<group>"; };
+		C10000000000000000000010 = { isa = PBXBuildFile; fileRef = C1000000000000000000000F; };
+		C10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoragePolicy.swift; sourceTree = "<group>"; };
+		C10000000000000000000002 = { isa = PBXBuildFile; fileRef = C10000000000000000000001; };
+		C10000000000000000000003 = { isa = PBXBuildFile; fileRef = C10000000000000000000001; };
+		C10000000000000000000004 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCloudStorage.swift; sourceTree = "<group>"; };
+		C10000000000000000000005 = { isa = PBXBuildFile; fileRef = C10000000000000000000004; };
+		C10000000000000000000006 = { isa = PBXBuildFile; fileRef = A1000000000000000000000B; };
+		C10000000000000000000007 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSync.swift; sourceTree = "<group>"; };
+		C10000000000000000000008 = { isa = PBXBuildFile; fileRef = C10000000000000000000007; };
+		C10000000000000000000009 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTLSIdentity.swift; sourceTree = "<group>"; };
+		C1000000000000000000000A = { isa = PBXBuildFile; fileRef = C10000000000000000000009; };
+		C1000000000000000000000B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDownloadServer.swift; sourceTree = "<group>"; };
+		C1000000000000000000000C = { isa = PBXBuildFile; fileRef = C1000000000000000000000B; };
+		C1000000000000000000000D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDownloadView.swift; sourceTree = "<group>"; };
+		C1000000000000000000000E = { isa = PBXBuildFile; fileRef = C1000000000000000000000D; };
 		B1000000000000000000000A = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSimulation.swift; sourceTree = "<group>"; };
 		B1000000000000000000000B = { isa = PBXBuildFile; fileRef = B1000000000000000000000A; };
 		B10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkPolicy.swift; sourceTree = "<group>"; };
@@ -252,6 +268,8 @@
 			path = Shared;
 			sourceTree = "<group>";
 			children = (
+				C10000000000000000000001,
+				A1000000000000000000000B,
 				B10000000000000000000001,
 				A10000000000000000000001,
 				A10000000000000000000004,
@@ -291,12 +309,16 @@
 			path = Phone;
 			sourceTree = "<group>";
 			children = (
+				C10000000000000000000007,
+				C1000000000000000000000F,
+				C10000000000000000000009,
+				C1000000000000000000000B,
+				C1000000000000000000000D,
 				B1000000000000000000000A,
 				B10000000000000000000004,
 				B10000000000000000000008,
 				A10000000000000000000007,
 				A10000000000000000000009,
-				A1000000000000000000000B,
 				A1000000000000000000000D,
 				A1000000000000000000000F,
 				A10000000000000000000011,
@@ -349,6 +371,7 @@
 			path = Watch;
 			sourceTree = "<group>";
 			children = (
+				C10000000000000000000004,
 				B10000000000000000000006,
 				DE50420CAAA2504EB9460349,
 				B399D964CAD3562986A67802,
@@ -401,6 +424,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C10000000000000000000003,
+				C10000000000000000000005,
+				C10000000000000000000006,
 				B10000000000000000000003,
 				B10000000000000000000007,
 				A10000000000000000000003,
@@ -574,6 +600,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C10000000000000000000002,
+				C10000000000000000000008,
+				C10000000000000000000010,
+				C1000000000000000000000A,
+				C1000000000000000000000C,
+				C1000000000000000000000E,
 				B1000000000000000000000B,
 				B10000000000000000000002,
 				B10000000000000000000005,

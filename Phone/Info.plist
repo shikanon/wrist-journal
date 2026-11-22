@@ -5,4 +5,6 @@
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array><string>io.github.shikanon.wristjournal.daily</string></array>
     <key>JournalCloudContainer</key><string>iCloud.io.github.shikanon.wristjournal</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>开启临时下载后，允许同一 Wi-Fi 下的 Mac 使用带访问令牌的 HTTPS 地址下载录音。</string>
 </dict></plist>

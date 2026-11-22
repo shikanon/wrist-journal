@@ -26,9 +26,10 @@ final class PhoneJournal: ObservableObject {
             publishStorage()
         }
     }
-    @Published var storage = RecordingStorage(rawValue: UserDefaults.standard.string(forKey: RecordingStorage.settingsKey) ?? "") ?? .automatic {
+    @Published var storage = RecordingStorage.preference(UserDefaults.standard.string(forKey: RecordingStorage.settingsKey)) {
         didSet {
             UserDefaults.standard.set(storage.rawValue, forKey: RecordingStorage.settingsKey)
+            if storage == .cloud { UserDefaults.standard.set(true, forKey: "cloudInboxEnabled") }
             publishStorage()
         }
     }
@@ -49,22 +50,38 @@ final class PhoneJournal: ObservableObject {
     let network = UploadNetwork()
     lazy var workState = DailyWorkState.load(store)
     lazy var cloudBackup = CloudBackup()
+    lazy var localDownload = LocalDownloadServer(store: store)
+    @Published var storageSyncStatus: String?
+    var synchronizingStorage = false
+    var sourceTask: Task<Void, Never>?
     private var worker: Task<Void, Never>?
     private var automaticDailyTask: Task<Void, Never>?
+    private var automaticWorkRequested = false
     var hasAnalysisWorker: Bool { worker != nil }
 
     func foregroundEntered() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-fixture") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { return }
+        #endif
+        scheduleSourceSync()
         resumeAnalysis()
+        automaticWorkRequested = true
         guard automaticDailyTask == nil, dailySettings.automatic || dailySettings.healthEnabled else { return }
         automaticDailyTask = Task { [weak self] in
             guard let self else { return }
             defer { self.automaticDailyTask = nil }
-            _ = await self.processDays(automatic: true)
+            repeat {
+                self.automaticWorkRequested = false
+                _ = await self.processDays(automatic: true)
+            } while self.automaticWorkRequested && !Task.isCancelled
         }
     }
 
     func foregroundExited() {
         automaticDailyTask?.cancel()
+        sourceTask?.cancel()
+        localDownload.stop(reason: "App 已进入后台，下载服务已关闭")
         AnalysisScheduling.schedule(settings: dailySettings)
     }
 
@@ -75,10 +92,15 @@ final class PhoneJournal: ObservableObject {
                 let before = self?.recordings.count
                 self?.reload()
                 if self?.recordings.count != before { self?.syncStatus = "已收到手表录音" }
+                if UIApplication.shared.applicationState == .active { self?.foregroundEntered() }
+            case .cloudAvailable:
+                UserDefaults.standard.set(true, forKey: "cloudInboxEnabled")
+                self?.scheduleSourceSync(force: true)
             case .message(let message): self?.message = message
             case .ready:
                 self?.publishStorage()
                 if let ids = try? self?.store.pendingPurgeIDs() { self?.notifyWatchPurge(ids) }
+                if UIApplication.shared.applicationState == .active { self?.scheduleSourceSync() }
             case .purgeAcknowledged(let ids):
                 try? self?.store.acknowledgePurge(ids)
             }
@@ -87,7 +109,11 @@ final class PhoneJournal: ObservableObject {
 
     init() {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-fixture") {
+        if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") {
+            let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalStorageTests")
+            try? FileManager.default.removeItem(at: root)
+            store = JournalStore(root: root)
+        } else if ProcessInfo.processInfo.arguments.contains("-journal-fixture") {
             let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalUITests")
             if ProcessInfo.processInfo.arguments.contains("-journal-fixture-reset") { try? FileManager.default.removeItem(at: root) }
             store = JournalStore(root: root)
@@ -209,16 +235,21 @@ final class PhoneJournal: ObservableObject {
     #endif
 
     func syncRecordings() {
+        requestRecordings(endedOnly: false)
+        scheduleSourceSync(force: true)
+    }
+
+    func requestRecordings(endedOnly: Bool) {
         do {
             try transfer.publishSettings(storage: storage, settings: dailySettings)
             let known = try store.pendingRecordings().lazy.filter { entry in
                 guard entry.isPlayable, let url = try? self.store.audio(entry.id) else { return false }
                 return FileManager.default.fileExists(atPath: url.path)
             }.prefix(500).map(\.id)
-            let direct = try transfer.syncRecordings(known: Array(known), purged: store.pendingPurgeIDs())
+            let direct = try transfer.syncRecordings(known: Array(known), purged: store.pendingPurgeIDs(), endedOnly: endedOnly)
             syncStatus = direct ? "正在请求录音，文件会陆续到达" : "已排队，手表可用后会自动同步"
         } catch {
-            message = error.localizedDescription
+            syncStatus = error.localizedDescription
         }
     }
 
@@ -477,7 +508,10 @@ final class PhoneJournal: ObservableObject {
             return false
         }
         do {
-            try store.delete(entry.id)
+            if entry.storage == .cloud {
+                try store.purgeRaw(entry.id)
+                notifyWatchPurge(try store.pendingPurgeIDs())
+            } else { try store.delete(entry.id) }
             jobs.removeValue(forKey: entry.id)
             reload()
             return true

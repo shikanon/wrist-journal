@@ -15,6 +15,7 @@ struct WristJournalPhone: App {
         AnalysisScheduling.register(journal: journal)
         AnalysisScheduling.schedule(settings: journal.dailySettings)
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { _tab = State(initialValue: 3) }
         if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") ||
             ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { _tab = State(initialValue: 2) }
         #endif
@@ -40,6 +41,7 @@ struct WristJournalPhone: App {
             .modifier(JournalNotice(message: $journal.message))
             .task {
                 #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { await journal.runStorageSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-power-simulation") { await journal.runPowerSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") { await journal.runSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { journal.verifySimulationPersistence() }
@@ -255,8 +257,19 @@ private struct JournalSettings: View {
                 Toggle("手表仅充电时自动传输", isOn: Binding(
                     get: { journal.dailySettings.transferChargingOnly ?? false },
                     set: { journal.dailySettings.transferChargingOnly = $0 }))
+                if journal.storage == .phone {
+                    Stepper("批量间隔：\(StoragePolicy.batchMinutes(journal.dailySettings.batchMinutes)) 分钟",
+                            value: Binding(get: { StoragePolicy.batchMinutes(journal.dailySettings.batchMinutes) },
+                                           set: { journal.dailySettings.batchMinutes = $0 }), in: 15...360, step: 15)
+                }
+                NavigationLink("Mac 临时下载") {
+                    LocalDownloadView(journal: journal, server: journal.localDownload)
+                }
+                if let status = journal.storageSyncStatus { Text(status).font(.footnote) }
             } footer: {
-                Text("自动模式优先交给 iPhone。手表先离线暂存，iPhone 确认保存后清理手表副本。设置对后续录音生效；每日分析完成后，两端原音都会按清理策略删除。")
+                Text(journal.storage == .cloud ?
+                     "选择云端即允许录音和地点保存到私人 iCloud；健康样本不上传。手表上传确认后释放原音，手机再读取分析。请求禁用蜂窝；系统可能经配对手机转发，无法强制手表直连 Wi-Fi。设置对后续录音生效。" :
+                     "默认优先手表：手机定期拉取结束日期的录音。优先手机：手表安全暂存并批量发送，手机确认保存后释放手表副本。设置对后续录音生效；系统决定实际后台执行时间，录音期间暂停自动大文件传输。")
             }
             Section("火山方舟") {
                 Picker("API Key 来源", selection: $journal.credential) {
@@ -302,7 +315,11 @@ private struct JournalSettings: View {
                     .onChange(of: journal.dailySettings.healthEnabled) {
                         if journal.dailySettings.healthEnabled { Task { await journal.authorizeDailyHealth() } }
                     }
-                Toggle("云端备份原始录音", isOn: $journal.dailySettings.cloudBackup)
+                if journal.storage == .cloud {
+                    LabeledContent("新录音云端备份", value: "已随云端模式开启")
+                } else {
+                    Toggle("云端备份原始录音", isOn: $journal.dailySettings.cloudBackup)
+                }
                 LabeledContent("健康统计时区", value: journal.dailySettings.healthTimeZoneIdentifier ?? TimeZone.current.identifier)
             } header: {
                 Text("每日分析与存储")

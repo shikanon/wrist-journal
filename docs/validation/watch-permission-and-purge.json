@@ -1,6 +1,6 @@
 {
   "watchPurgeVerified": true,
-  "microphoneDenied": true,
   "reportBlockedDuringRecording": true,
+  "microphoneDenied": true,
   "passed": true
 }
