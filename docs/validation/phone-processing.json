@@ -1,0 +1,11 @@
+{
+  "phoneModelRequests": 0,
+  "metadataExported": true,
+  "metadataOnlyRecordingSupported": true,
+  "noneRetainsRaw": true,
+  "noneBlocksRequestBoundary": true,
+  "passed": true,
+  "nonePausesPreviouslyCommittedCleanup": true,
+  "duplicateResultIgnored": true,
+  "watchResultArchived": true
+}

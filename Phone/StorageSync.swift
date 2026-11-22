@@ -51,6 +51,7 @@ extension PhoneJournal {
 
     func scheduleSourceSync(force: Bool = false) {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") { return }
         if ProcessInfo.processInfo.arguments.contains("-journal-fixture") ||
             ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { return }
         #endif

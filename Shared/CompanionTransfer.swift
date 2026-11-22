@@ -11,23 +11,31 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         static let receipt = "recording-receipt"
         static let purge = "purge-recordings"
         static let purgeAck = "purge-ack"
+        static let processing = "processing-configuration"
+        static let result = "processing-result"
+        static let resultAck = "processing-result-ack"
+        static let processingAudio = "processing-audio"
     }
 
     enum Event: Sendable {
         case updated
         case message(String)
         #if os(watchOS)
-        case ready, sync(Set<UUID>, [UUID], Bool), received(UUID), purge([UUID])
+        case ready, sync(Set<UUID>, [UUID], Bool), received(UUID), purge([UUID]), process([UUID], String)
         #else
-        case ready, cloudAvailable, purgeAcknowledged([UUID])
+        case ready, cloudAvailable, purgeAcknowledged([UUID]), credentialReady(String)
         #endif
     }
 
     private let store: JournalStore
     private let onEvent: @Sendable (Event) -> Void
+    private let credentialProvider: @Sendable (String) async -> (Data, String)?
 
-    init(store: JournalStore, onEvent: @escaping @Sendable (Event) -> Void) {
+    init(store: JournalStore,
+         credentialProvider: @escaping @Sendable (String) async -> (Data, String)? = { _ in nil },
+         onEvent: @escaping @Sendable (Event) -> Void) {
         self.store = store
+        self.credentialProvider = credentialProvider
         self.onEvent = onEvent
     }
 
@@ -39,6 +47,52 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
     }
 
     #if os(watchOS)
+    var processing: ProcessingConfiguration {
+        guard let data = WCSession.default.receivedApplicationContext[Key.processing] as? Data,
+              let config = try? JSONDecoder().decode(ProcessingConfiguration.self, from: data) else {
+            // Stable default must not invalidate a running worker on every read.
+            var config = ProcessingConfiguration()
+            config.revision = "unsynchronized"
+            return config
+        }
+        return config
+    }
+    func processingKey(_ config: ProcessingConfiguration) async throws -> String {
+        guard config.mode == .watch, processing == config else { throw CancellationError() }
+        if UserDefaults.standard.string(forKey: "watchCredentialRevision") == config.revision,
+           let key = ArkCredential(rawValue: config.credential)?.load() { return key }
+        let session = try activeSession()
+        guard session.isReachable else { throw JournalError.phoneUnavailable }
+        let key: String = try await withCheckedThrowingContinuation { continuation in
+            session.sendMessage([Key.kind: "processing-credentials", "revision": config.revision], replyHandler: { reply in
+                guard let data = reply["configuration"] as? Data,
+                      let received = try? JSONDecoder().decode(ProcessingConfiguration.self, from: data),
+                      received == config, let key = reply["key"] as? String, !key.isEmpty else {
+                    continuation.resume(throwing: AnalysisError.missingCredential)
+                    return
+                }
+                continuation.resume(returning: key)
+            }, errorHandler: { continuation.resume(throwing: $0) })
+        }
+        try Task.checkCancellation()
+        guard processing == config, let credential = ArkCredential(rawValue: config.credential) else {
+            throw CancellationError()
+        }
+        try credential.save(key)
+        UserDefaults.standard.set(config.revision, forKey: "watchCredentialRevision")
+        session.transferUserInfo([Key.kind: "credential-ready", "revision": config.revision])
+        return key
+    }
+    func sendResults() throws {
+        let session = try activeSession()
+        for url in try store.pendingResults() {
+            let id = url.deletingPathExtension().lastPathComponent
+            guard !session.outstandingFileTransfers.contains(where: {
+                $0.file.metadata?[Key.kind] as? String == Key.result && $0.file.metadata?["resultID"] as? String == id
+            }) else { continue }
+            session.transferFile(url, metadata: [Key.kind: Key.result, "resultID": id])
+        }
+    }
     var storage: RecordingStorage {
         let raw = WCSession.isSupported()
             ? WCSession.default.receivedApplicationContext[RecordingStorage.settingsKey] as? String : nil
@@ -118,6 +172,14 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
             onEvent(.purge((info["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:))))
         case Key.receipt:
             if let raw = info["id"] as? String, let id = UUID(uuidString: raw) { onEvent(.received(id)) }
+        case "process-recordings":
+            if let revision = info["revision"] as? String {
+                onEvent(.process((info["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:)), revision))
+            }
+        case Key.resultAck:
+            if let raw = info["resultID"] as? String, let id = UUID(uuidString: raw) {
+                try? store.acknowledgeResult(id)
+            }
         default: break
         }
     }
@@ -137,6 +199,48 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         if session.isReachable { onEvent(.ready) }
     }
     #else
+    func publishProcessing(_ configuration: ProcessingConfiguration) throws {
+        let session = try watchSession()
+        var context = session.applicationContext
+        context[Key.processing] = try JSONEncoder().encode(configuration)
+        guard !NSDictionary(dictionary: context).isEqual(to: session.applicationContext) else { return }
+        try session.updateApplicationContext(context)
+    }
+    func requestProcessing(_ entries: [Recording], manual: Bool) throws {
+        let session = try watchSession()
+        guard let data = session.applicationContext[Key.processing] as? Data,
+              let config = try? JSONDecoder().decode(ProcessingConfiguration.self, from: data),
+              config.mode == .watch else { throw CancellationError() }
+        // A file request itself is durable; send originals missing from the Watch as idempotent deliveries.
+        for entry in entries where entry.isPlayable && entry.watchProcessingReceivedAt == nil {
+            guard !session.outstandingFileTransfers.contains(where: {
+                $0.file.metadata?[Key.kind] as? String == Key.processingAudio &&
+                $0.file.metadata?["id"] as? String == entry.id.uuidString
+            }), FileManager.default.fileExists(atPath: try store.audio(entry.id).path) else { continue }
+            session.transferFile(try store.outgoingAudio(entry.id), metadata: [
+                Key.kind: Key.processingAudio, Key.metadata: try JSONEncoder().encode(entry),
+                "id": entry.id.uuidString, "manual": manual, "revision": config.revision
+            ])
+        }
+        if manual {
+            let ids = entries.map(\.id.uuidString).sorted()
+            guard !ids.isEmpty, !session.outstandingUserInfoTransfers.contains(where: {
+                $0.userInfo[Key.kind] as? String == "process-recordings" && $0.userInfo["ids"] as? [String] == ids &&
+                $0.userInfo["revision"] as? String == config.revision
+            }) else { return }
+            session.transferUserInfo([Key.kind: "process-recordings", "ids": ids, "revision": config.revision])
+        }
+    }
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any],
+                 replyHandler: @escaping ([String: Any]) -> Void) {
+        guard message[Key.kind] as? String == "processing-credentials",
+              let revision = message["revision"] as? String else { replyHandler([:]); return }
+        Task {
+            if let (configuration, key) = await credentialProvider(revision) {
+                replyHandler(["configuration": configuration, "key": key])
+            } else { replyHandler([:]) }
+        }
+    }
     private func watchSession() throws -> WCSession {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
               WCSession.default.isPaired, WCSession.default.isWatchAppInstalled else {
@@ -205,31 +309,60 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
             return
         }
         if activationState == .activated { onEvent(.ready) }
-        #if os(watchOS)
         if activationState == .activated {
             DispatchQueue.main.async { [self] in
                 let pending = session.outstandingFileTransfers.map { $0.file.fileURL.standardizedFileURL }
                 try? store.cleanOutgoingReports(keeping: Set(pending))
             }
         }
-        #endif
     }
 
     #if os(iOS)
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        if userInfo[Key.kind] as? String == "processing-audio-receipt",
+           let raw = userInfo["id"] as? String, let id = UUID(uuidString: raw) {
+            do {
+                try store.confirmWatchProcessingReceipt(id)
+            } catch { onEvent(.message("手表接收状态未保存，请稍后重试。")) }
+        }
         if userInfo[Key.kind] as? String == "cloud-available" { onEvent(.cloudAvailable) }
         if userInfo[Key.kind] as? String == Key.purgeAck {
             onEvent(.purgeAcknowledged((userInfo["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:))))
+        }
+        if userInfo[Key.kind] as? String == "credential-ready", let revision = userInfo["revision"] as? String {
+            onEvent(.credentialReady(revision))
         }
     }
     func sessionWatchStateDidChange(_ session: WCSession) { onEvent(.ready) }
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
 
+    #endif
+
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         // The system removes this temporary URL when the delegate method returns.
         do {
             switch file.metadata?[Key.kind] as? String {
+            #if os(watchOS)
+            case Key.processingAudio:
+                guard let data = file.metadata?[Key.metadata] as? Data else { throw JournalError.invalidTransfer }
+                var entry = try JSONDecoder().decode(Recording.self, from: data)
+                entry.phoneReceivedAt = .now
+                entry.awaitingWatchResult = true
+                if (try? store.analysis(entry.id)?.state) != .complete {
+                    try store.receive(file.fileURL, recording: entry)
+                }
+                session.transferUserInfo([Key.kind: "processing-audio-receipt", "id": entry.id.uuidString])
+                if file.metadata?["manual"] as? Bool == true, let revision = file.metadata?["revision"] as? String {
+                    onEvent(.process([entry.id], revision))
+                }
+            #else
+            case Key.result:
+                let data = try Data(contentsOf: file.fileURL)
+                guard data.count <= 8_000_000 else { throw JournalError.invalidTransfer }
+                let result = try JSONDecoder().decode(ProcessingResult.self, from: data)
+                try store.receiveResult(result)
+                session.transferUserInfo([Key.kind: Key.resultAck, "resultID": result.id.uuidString])
             case Key.recording:
                 guard let data = file.metadata?[Key.metadata] as? Data else { throw JournalError.invalidTransfer }
                 let recording = try JSONDecoder().decode(Recording.self, from: data)
@@ -244,6 +377,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
                 let report = try JSONDecoder().decode(HealthReport.self, from: Data(contentsOf: file.fileURL))
                 if let previous = try? store.report(), previous.generatedAt >= report.generatedAt { return }
                 try store.saveReport(report)
+            #endif
             default:
                 throw JournalError.invalidTransfer
             }
@@ -252,11 +386,8 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
             onEvent(.message("导入失败：\(error.localizedDescription)"))
         }
     }
-    #endif
-
-    #if os(watchOS)
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
-        if fileTransfer.file.metadata?[Key.kind] as? String == Key.report {
+        if [Key.report, Key.processingAudio].contains(fileTransfer.file.metadata?[Key.kind] as? String ?? "") {
             try? FileManager.default.removeItem(at: fileTransfer.file.fileURL)
         }
         if let error {
@@ -265,5 +396,4 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
             onEvent(.message("传输完成。请在 iPhone 手记中查看。"))
         }
     }
-    #endif
 }

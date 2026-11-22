@@ -10,6 +10,7 @@ struct LocalDownloadView: View {
                 Text("将 iPhone 与 Mac 连到同一 Wi-Fi，先同步录音，再开启下载。下载期间请保持此 App 在前台。")
                 Text("Apple Watch 无法运行此类网页服务，录音通过 iPhone 中转。")
                     .foregroundStyle(.secondary)
+                Text("Mac 页面可下载原音，以及包含时间、时区、地点、已有运动数据和健康报告的 JSON 元数据。导出不会删除原音。")
                 Button("先同步录音") { journal.syncRecordings() }
                 if let status = journal.storageSyncStatus { Text(status).font(.footnote) }
             }

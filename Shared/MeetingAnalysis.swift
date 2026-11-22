@@ -60,7 +60,7 @@ enum AnalysisError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingCredential: "所选来源没有可用的方舟 API Key，请在设置中配置。"
-        case .keychain: "无法访问 iPhone 钥匙串。"
+        case .keychain: "无法访问本机钥匙串。"
         case .unreadableAudio: "无法读取完整录音。"
         case .invalidResponse: "方舟未返回完整的分析内容，请重试。"
         case .http(401), .http(403): "方舟拒绝了请求，请检查 API Key 和模型权限。"
@@ -68,25 +68,6 @@ enum AnalysisError: LocalizedError {
         case .http(let status): "方舟请求失败（HTTP \(status)），请检查模型 ID 或稍后重试。"
         }
     }
-}
-
-struct MeetingAnalysisJob: Codable, Sendable {
-    enum State: String, Codable { case queued, failed, complete }
-
-    let model: String
-    let credential: String
-    let includeContext: Bool
-    var state: State = .queued
-    var notes: [String] = []
-    var totalChunks = 0
-    var minutes: String?
-    var error: String?
-    var speechWindows: [SpeechWindow]?
-    var retry: RetryState?
-    var automatic: Bool?
-    var audioPlan: AudioPlan?
-    var uploadFormat: AudioUploadFormat?
-    var uploadedBytes: Int?
 }
 
 private struct ArkClient {
@@ -132,7 +113,15 @@ private struct ArkClient {
         request.allowsCellularAccess = !wifiOnly
         request.allowsExpensiveNetworkAccess = !wifiOnly
         request.allowsConstrainedNetworkAccess = !wifiOnly
-        let (data, response) = try await Self.session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
+            (data, response) = try await AnalysisFixture.shared.respond(request)
+        } else { (data, response) = try await Self.session.data(for: request) }
+        #else
+        (data, response) = try await Self.session.data(for: request)
+        #endif
         guard let response = response as? HTTPURLResponse else { throw AnalysisError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else { throw AnalysisError.http(response.statusCode) }
         guard let choice = try? JSONDecoder().decode(Reply.self, from: data).choices.first,

@@ -1,34 +1,5 @@
 import AVFoundation
 
-enum AudioUploadFormat: String, Codable, CaseIterable, Identifiable {
-    case automatic, m4a, wav
-    var id: Self { self }
-    var title: String {
-        switch self {
-        case .automatic: "自动（已验证模型用 M4A）"
-        case .m4a: "M4A 压缩音频"
-        case .wav: "WAV 兼容模式"
-        }
-    }
-    func resolved(model: String) -> Self {
-        self == .automatic ? (model == MeetingAnalyzer.defaultModel ? .m4a : .wav) : self
-    }
-}
-
-struct AudioSegment: Codable, Sendable {
-    let startFrame: Int64
-    let frameCount: Int64
-}
-
-struct AudioPlan: Codable, Sendable {
-    let sampleRate: Double
-    let sourceFrames: Int64
-    let segments: [AudioSegment]
-    var skippedSeconds: Double {
-        Double(sourceFrames - segments.reduce(Int64(0)) { $0 + $1.frameCount }) / sampleRate
-    }
-}
-
 enum AudioPreparation {
     /// Only removes >=8 seconds below both conservative thresholds, with half-second edge padding.
     /// It never joins disjoint source ranges into one uploaded segment.

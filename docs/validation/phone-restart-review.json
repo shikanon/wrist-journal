@@ -1,8 +1,8 @@
 {
-  "deletedRawCount": 1,
-  "passed": true,
   "settingsPersisted": true,
-  "meetingCount": 1,
+  "passed": true,
+  "eventCount": 1,
+  "deletedRawCount": 1,
   "scenario": "restart-review",
-  "eventCount": 1
+  "meetingCount": 1
 }

@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct Export: FileDocument {
-    static var readableContentTypes: [UTType] { [.commaSeparatedText, .html] }
+    static var readableContentTypes: [UTType] { [.commaSeparatedText, .html, .json] }
 
     let data: Data
 
@@ -19,14 +19,49 @@ struct Export: FileDocument {
         FileWrapper(regularFileWithContents: data)
     }
 
-    static func recordings(_ recordings: [Recording]) -> Self {
+    static func recordings(_ recordings: [Recording], store: JournalStore) -> Self {
         let formatter = ISO8601DateFormatter()
-        let rows = [["id", "started_at_utc", "duration_seconds", "state", "note", "audio_file"]]
+        let available = Set(recordings.filter {
+            guard $0.isPlayable, let url = try? store.audio($0.id) else { return false }
+            return FileManager.default.fileExists(atPath: url.path)
+        }.map(\.id))
+        let rows = [["id", "started_at_utc", "duration_seconds", "state", "note", "audio_file",
+                     "time_zone", "latitude", "longitude", "local_audio_available"]]
             + recordings.map { entry in
                 [entry.id.uuidString, formatter.string(from: entry.startedAt), String(entry.duration),
-                 entry.state.rawValue, spreadsheetSafe(entry.note), "WristJournal-\(entry.id.uuidString).m4a"]
+                 entry.state.rawValue, spreadsheetSafe(entry.note), available.contains(entry.id) ? "WristJournal-\(entry.id.uuidString).m4a" : "",
+                 spreadsheetSafe(entry.timeZoneIdentifier ?? ""), entry.location.map { String($0.latitude) } ?? "",
+                 entry.location.map { String($0.longitude) } ?? "", available.contains(entry.id) ? "true" : "false"]
             }
         return csv(rows)
+    }
+
+    static func metadata(_ store: JournalStore) throws -> Data {
+        struct Item: Encodable {
+            let recording: Recording
+            let endedAtUTC: Date
+            let audioFile: String?
+            let localAudioAvailable: Bool
+        }
+        struct Manifest: Encodable {
+            let formatVersion = 1
+            let exportedAt = Date.now
+            let timeEncoding = "ISO-8601 UTC; recording.timeZoneIdentifier preserves capture timezone"
+            let recordings: [Item]
+            let healthReport: HealthReport?
+            let dailyReports: [DailyJournalReport]
+        }
+        let items = try store.list().map { entry in
+            let audioURL = try store.audio(entry.id)
+            let available = entry.isPlayable && FileManager.default.fileExists(atPath: audioURL.path)
+            return Item(recording: entry, endedAtUTC: entry.startedAt.addingTimeInterval(entry.duration),
+                        audioFile: available ? "WristJournal-\(entry.id.uuidString).m4a" : nil,
+                        localAudioAvailable: available)
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(Manifest(recordings: items, healthReport: store.report(), dailyReports: store.dailyReports()))
     }
 
     static func healthCSV(_ report: HealthReport) -> Self {

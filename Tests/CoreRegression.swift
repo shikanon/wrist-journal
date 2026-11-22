@@ -229,5 +229,72 @@ enum CoreRegression {
         let resumedWork = StorageWorkState.load(JournalStore(root: root))
         try check(resumedWork.request?.endedOnly == true && resumedWork.lastBatch == start, "pending request and batch survive restart")
         print("PASS: \(checks) total core and storage regression checks")
+        try check(ProcessingMode.preference(nil) == .phone && ProcessingMode.preference("unknown") == .phone,
+                  "default and invalid processing mode use phone")
+        try check(ProcessingMode.allCases == [.watch, .phone, .none], "three processing choices")
+        try check(!ProcessingMode.none.allowsModel(on: .phone) && !ProcessingMode.none.allowsModel(on: .watch),
+                  "none disallows both model locations")
+        try check(!ProcessingMode.watch.allowsModel(on: .phone) && ProcessingMode.watch.allowsModel(on: .watch),
+                  "watch excludes phone fallback")
+        try check(ProcessingMode.watch.retainsWatchAudio(completed: false) &&
+                  !ProcessingMode.watch.retainsWatchAudio(completed: true), "unfinished watch analysis retains audio")
+        try check(ProcessingMode.phone.retainsWatchAudio(completed: false, forwardedForProcessing: true),
+                  "forwarded audio waits for its result even when it precedes public configuration")
+        var analyzed = MeetingAnalysisJob(model: "fixture", credential: "personal", includeContext: false)
+        analyzed.processor = .watch
+        analyzed.state = .complete
+        analyzed.resultID = UUID()
+        analyzed.minutes = "已完成"
+        analyzed.speechWindows = speech
+        let result = ProcessingResult(id: analyzed.resultID!, recording: phoneCopy, job: analyzed)
+        try store.saveWatchResult(result)
+        try store.saveWatchResult(result)
+        try check(try JournalStore(root: root).pendingResults().count == 1, "immutable result outbox survives restart and deduplicates")
+        let inbox = JournalStore(root: root.appendingPathComponent("PhoneInbox"))
+        try inbox.receiveResult(result)
+        try inbox.receiveResult(result)
+        try check(try inbox.list().count == 1 && inbox.analysis(phoneCopy.id)?.resultID == result.id,
+                  "replayed result imported exactly once")
+        try check(try !inbox.recording(phoneCopy.id).isPlayable &&
+                  inbox.pendingRecordings().map(\.id) == [phoneCopy.id], "metadata-only result enters pending archive index")
+        try Data([1]).write(to: inbox.localStateURL(".catalog-dirty"))
+        try check(try JournalStore(root: inbox.localStateURL("")).pendingDays().count == 1,
+                  "result-only marker survives catalog recovery")
+        try inbox.purgeRaw(phoneCopy.id)
+        try inbox.receiveResult(result)
+        try check(try inbox.pendingRecordings().isEmpty && inbox.recording(phoneCopy.id).rawDeletedAt != nil,
+                  "late result cannot resurrect cleaned recording")
+        analyzed.speechWindows = [SpeechWindow(start: start.addingTimeInterval(-1), end: start, cue: "bad")]
+        do {
+            try inbox.receiveResult(ProcessingResult(id: result.id, recording: phoneCopy, job: analyzed))
+            fatalError("Out-of-range result accepted")
+        } catch { checks += 1 }
+        try store.acknowledgeResult(result.id)
+        try check(try JournalStore(root: root).pendingResults().isEmpty, "result receipt survives restart")
+        try check(try store.recording(phoneCopy.id).rawDeletedAt == nil, "result ACK is not final cleanup")
+        let repairRoot = root.appendingPathComponent("InterruptedInbox")
+        let repairing = JournalStore(root: repairRoot)
+        var evicted = phoneCopy
+        evicted.localEvictedAt = .now
+        try repairing.save(evicted)
+        try repairing.saveAnalysis(JSONEncoder().encode(result.job), id: evicted.id, complete: true)
+        try check(try repairing.pendingRecordings().isEmpty, "simulate interruption before result marker commit")
+        try repairing.receiveResult(result)
+        try check(try repairing.pendingRecordings().map(\.id) == [evicted.id],
+                  "replayed result repairs interrupted marker commit")
+        try repairing.purgeRaw(evicted.id)
+        try repairing.confirmWatchProcessingReceipt(evicted.id)
+        try check(try repairing.recording(evicted.id).rawDeletedAt != nil &&
+                  repairing.pendingRecordings().isEmpty, "late source receipt cannot resurrect deleted metadata")
+        let publicConfig = String(data: try JSONEncoder().encode(ProcessingConfiguration()), encoding: .utf8)!
+        try check(!publicConfig.contains("APIKey") && !publicConfig.contains("hash"), "public config has no secret field")
+        var requested = WatchProcessingState()
+        requested.manual["future-watch-version"] = [UUID()]
+        try requested.save(store)
+        let pendingRequest = WatchProcessingState.load(JournalStore(root: root))
+        try check(pendingRequest.manual["future-watch-version"]?.count == 1 &&
+                  pendingRequest.manual["current-phone-version"] == nil,
+                  "out-of-order request persists but cannot authorize another configuration")
+        print("PASS: \(checks) total processing regression checks")
     }
 }

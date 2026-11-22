@@ -29,7 +29,7 @@ private struct DailyIndex: Codable {
 }
 
 private struct JournalCatalog: Codable {
-    var version = 2
+    var version = 3
     var recordings: [String: RecordingIndex] = [:]
     var days: [String: DailyIndex] = [:]
     var unfinishedAnalysis: Set<UUID> = []
@@ -83,7 +83,7 @@ struct JournalStore {
         let url = try localStateURL("catalog.json")
         let dirty = try localStateURL(".catalog-dirty")
         if !files.fileExists(atPath: dirty.path), let data = try? Data(contentsOf: url),
-           let saved = try? JSONDecoder().decode(JournalCatalog.self, from: data), saved.version == 2 {
+           let saved = try? JSONDecoder().decode(JournalCatalog.self, from: data), saved.version == 3 {
             state.catalog = saved
             return saved
         }
@@ -194,6 +194,10 @@ struct JournalStore {
                 }
                 recording.cloudUploadedAt = previous.cloudUploadedAt ?? recording.cloudUploadedAt
                 recording.motionWindows = previous.motionWindows ?? recording.motionWindows
+                recording.phoneReceivedAt = previous.phoneReceivedAt ?? recording.phoneReceivedAt
+                recording.watchProcessingReceivedAt = previous.watchProcessingReceivedAt ?? recording.watchProcessingReceivedAt
+                recording.remoteAnalysisComplete = previous.remoteAnalysisComplete ?? recording.remoteAnalysisComplete
+                recording.awaitingWatchResult = previous.awaitingWatchResult ?? recording.awaitingWatchResult
             }
             let destination = try folder(recording.id)
             let audioURL = try audio(recording.id)
@@ -262,6 +266,84 @@ struct JournalStore {
         }
     }
     func analysisURL(_ id: UUID) throws -> URL { try folder(id).appendingPathComponent("meeting-analysis.json") }
+    func analysis(_ id: UUID) throws -> MeetingAnalysisJob? {
+        let url = try analysisURL(id)
+        guard files.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(MeetingAnalysisJob.self, from: Data(contentsOf: url))
+    }
+    /// The immutable outbox is committed first, so a crash cannot lose a finished result.
+    func saveWatchResult(_ result: ProcessingResult) throws {
+        try result.validate()
+        try state.lock.withLock {
+            let url = try directory("ProcessingOutbox").appendingPathComponent(result.id.uuidString + ".json")
+            if !files.fileExists(atPath: url.path) {
+                try JSONEncoder().encode(result).write(to: url, options: .atomic)
+            }
+            try saveAnalysis(JSONEncoder().encode(result.job), id: result.recording.id, complete: true)
+        }
+    }
+    func pendingResults() throws -> [URL] {
+        try state.lock.withLock {
+            try files.contentsOfDirectory(at: directory("ProcessingOutbox"), includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "json" }
+        }
+    }
+    func acknowledgeResult(_ id: UUID) throws {
+        try state.lock.withLock {
+            let url = try directory("ProcessingOutbox").appendingPathComponent(id.uuidString + ".json")
+            if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+        }
+    }
+    /// Results can arrive before audio. Keep that absence explicit; never resurrect tombstones.
+    func receiveResult(_ result: ProcessingResult) throws {
+        try result.validate()
+        try change { index in
+            let previous = try? recording(result.recording.id)
+            if let previous {
+                guard previous.startedAt == result.recording.startedAt,
+                      abs(previous.duration - result.recording.duration) < 1 else { throw JournalError.invalidTransfer }
+                if previous.rawDeletedAt != nil { return }
+                if let job = try analysis(previous.id), job.state == .complete {
+                    // Repair an interrupted job/metadata commit before acknowledging a replay.
+                    if job.processor == .watch, previous.remoteAnalysisComplete != true {
+                        var repaired = previous
+                        repaired.remoteAnalysisComplete = true
+                        try write(repaired, index: &index)
+                    }
+                    return
+                }
+            }
+            var entry = previous ?? result.recording
+            if previous == nil { entry.localEvictedAt = .now }
+            entry.remoteAnalysisComplete = true
+            let jobData = try JSONEncoder().encode(result.job)
+            if previous == nil {
+                // Unknown recordings appear atomically, never as an orphan UUID directory.
+                let staging = try root().appendingPathComponent(".incoming-result-\(UUID().uuidString)")
+                try files.createDirectory(at: staging, withIntermediateDirectories: true)
+                defer { try? files.removeItem(at: staging) }
+                try JSONEncoder().encode(entry).write(to: staging.appendingPathComponent("recording.json"))
+                try jobData.write(to: staging.appendingPathComponent("meeting-analysis.json"))
+                try files.moveItem(at: staging, to: folder(entry.id))
+            } else {
+                try jobData.write(to: analysisURL(entry.id), options: .atomic)
+            }
+            try write(entry, index: &index)
+            index.unfinishedAnalysis.remove(entry.id)
+        }
+    }
+    func outgoingAudio(_ id: UUID) throws -> URL {
+        let url = try directory("Outgoing").appendingPathComponent(UUID().uuidString + ".m4a")
+        try files.copyItem(at: audio(id), to: url)
+        return url
+    }
+    func confirmWatchProcessingReceipt(_ id: UUID) throws {
+        try change { index in
+            guard var entry = try? recording(id), entry.rawDeletedAt == nil else { return }
+            entry.watchProcessingReceivedAt = .now
+            try write(entry, index: &index)
+        }
+    }
     func saveAnalysis(_ data: Data, id: UUID, complete: Bool) throws {
         try change {
             try data.write(to: analysisURL(id), options: .atomic)

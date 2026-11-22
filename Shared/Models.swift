@@ -17,9 +17,15 @@ struct Recording: Codable, Identifiable, Sendable {
     var motionWindows: [ActivityWindow]?
     var cloudUploadedAt: Date?
     var localEvictedAt: Date?
+    var phoneReceivedAt: Date?
+    var remoteAnalysisComplete: Bool?
+    var watchProcessingReceivedAt: Date?
+    var awaitingWatchResult: Bool?
 
     var isPlayable: Bool { rawDeletedAt == nil && localEvictedAt == nil && (state == .saved || state == .interrupted) }
-    var needsLocalProcessing: Bool { rawDeletedAt == nil && !(storage == .phone && localEvictedAt != nil) }
+    var needsLocalProcessing: Bool {
+        rawDeletedAt == nil && (remoteAnalysisComplete == true || !(storage == .phone && localEvictedAt != nil))
+    }
 
     var title: String {
         note.isEmpty ? startedAt.formatted(date: .abbreviated, time: .shortened) : note

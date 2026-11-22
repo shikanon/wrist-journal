@@ -13,7 +13,8 @@ final class WatchCloudStorage {
     }
     func waitForCompletion() async { await task?.value }
 
-    func run(store: JournalStore, finished: @escaping @MainActor (String?, Date?) -> Void) {
+    func run(store: JournalStore, mayRelease: @escaping @MainActor (UUID) -> Bool,
+             finished: @escaping @MainActor (String?, Date?) -> Void) {
         guard task == nil else { return }
         let token = UUID()
         generation = token
@@ -28,9 +29,14 @@ final class WatchCloudStorage {
                 try store.recoverEvictions()
                 for entry in try store.pendingRecordings() where entry.storage == .cloud && entry.isPlayable {
                     try Task.checkCancellation()
-                    try await cloud.save(recording: entry, audio: store.audio(entry.id), wifiOnly: true)
+                    if entry.cloudUploadedAt == nil {
+                        try await cloud.save(recording: entry, audio: store.audio(entry.id), wifiOnly: true)
+                    }
                     try Task.checkCancellation()
-                    try store.evictLocal(entry.id, cloudConfirmedAt: .now)
+                    var saved = try store.recording(entry.id)
+                    saved.cloudUploadedAt = saved.cloudUploadedAt ?? .now
+                    try store.save(saved)
+                    if mayRelease(entry.id) { try store.evictLocal(entry.id, cloudConfirmedAt: saved.cloudUploadedAt) }
                     // Reload because device-transfer callbacks may have updated the shared state.
                     state = StorageWorkState.load(store)
                     state.cloudRetry = RetryState()

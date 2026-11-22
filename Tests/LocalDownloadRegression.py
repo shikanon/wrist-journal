@@ -63,6 +63,12 @@ def main():
     assert code == 200 and "no-store" in headers["Cache-Control"]
     assert url.fragment.encode() not in body
     assert request("/api/recordings")[0] == 401
+    assert request("/api/metadata")[0] == 401
+    code, _, metadata = request("/api/metadata", auth)
+    manifest = json.loads(metadata)
+    assert code == 200 and manifest["formatVersion"] == 1
+    assert any(row["localAudioAvailable"] for row in manifest["recordings"])
+    assert b"ArkAPIKey" not in metadata and b"processingRevision" not in metadata
     assert request("/api/recordings", {"Authorization": "Bearer wrong"})[0] == 401
     assert request("/api/recordings", {**auth, "Host": "evil.test"})[0] == 400
     code, _, body = request("/api/recordings", auth)
@@ -95,6 +101,7 @@ def main():
         "downloadSHA256Matches": True, "downloadBytes": len(audio),
         "authenticatedActivityExtendsLease": True, "unauthorizedActivityDoesNotExtendLease": True,
         "idleTimeoutClosesListener": True,
+        "metadataAuthenticatedAndExported": True,
     }
     (output / "storage-and-https.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
     run("io", args.phone, "screenshot", str(output / "storage-and-https.png"))

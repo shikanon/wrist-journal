@@ -172,7 +172,11 @@ final class LocalDownloadServer: ObservableObject {
             guard request.authorized(token: token) else {
                 try await respond(connection, code: 401, body: Data()); return
             }
-            if request.path == "/api/recordings" {
+            if request.path == "/api/metadata" {
+                let data = try Export.metadata(store)
+                guard touch(session) else { return }
+                try await respond(connection, code: 200, body: data, type: "application/json")
+            } else if request.path == "/api/recordings" {
                 let entries = try store.pendingRecordings().filter(\.isPlayable)
                 let rows = try entries.filter { FileManager.default.fileExists(atPath: try store.audio($0.id).path) }
                     .map { ["id": $0.id.uuidString, "title": $0.title, "duration": durationText($0.duration)] }
@@ -267,7 +271,9 @@ final class LocalDownloadServer: ObservableObject {
     li{display:flex;gap:16px;align-items:center;justify-content:space-between;background:white;padding:18px;margin:12px 0;border-radius:12px}
     ul{padding:0}small{display:block;color:#58746b}#status{color:#58746b}
     </style><h1>手记 · 临时下载</h1><p>录音由 iPhone 临时提供。下载不会删除原音。保持手机 App 在前台；空闲到期后连接会关闭。</p>
-    <button id="refresh">读取录音列表</button><p id="status">请使用手机显示的完整网址连接。</p><ul id="list"></ul>
+    <button id="refresh">读取录音列表</button> <button id="metadata">下载元数据与已有报告</button>
+    <p>元数据含录音时间、时区、地点、已有运动窗口与健康报告，缺少的音频会标明。原音请逐段下载。</p>
+    <p id="status">请使用手机显示的完整网址连接。</p><ul id="list"></ul>
     <script>
     const token=location.hash.slice(1);history.replaceState(null,'','/');
     const status=document.getElementById('status'),list=document.getElementById('list');
@@ -278,6 +284,10 @@ final class LocalDownloadServer: ObservableObject {
     button.onclick=async()=>{try{const ticket=await api('/api/ticket/'+encodeURIComponent(row.id));const a=document.createElement('a');a.href=ticket.path;a.download='';document.body.append(a);a.click();a.remove();status.textContent='下载已开始';}catch(e){status.textContent=e.message}};
     li.append(label,button);list.append(li)})}catch(e){status.textContent=e.message}}
     document.getElementById('refresh').onclick=refresh;if(token)refresh();
+    document.getElementById('metadata').onclick=async()=>{try{
+    const data=await api('/api/metadata'),url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+    const a=document.createElement('a');a.href=url;a.download='WristJournal-metadata.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    status.textContent='元数据已导出，原音保持不变';}catch(e){status.textContent=e.message}};
     </script></html>
     """
 }

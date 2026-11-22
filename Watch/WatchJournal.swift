@@ -15,6 +15,12 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published private(set) var collectionMode = CollectionMode.system
     @Published private(set) var collectionStatus: String?
     @Published private(set) var storageStatus: String?
+    @Published var processingStatus: String?
+    @Published var processingID: UUID?
+    @Published var watchMinutes: [UUID: String] = [:]
+    var processingTask: Task<Void, Never>?
+    var activeProcessingConfiguration: ProcessingConfiguration?
+    let watchAnalyzer = MeetingAnalyzer()
 
     let store: JournalStore
     private let health = HealthReader()
@@ -40,6 +46,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             case .message(let message): self.message = message
             case .ready:
                 if self.current == nil { self.collectionMode = self.transfer.collectionMode }
+                self.queueProcessing()
                 self.queueRecordings()
             case .sync(let known, let purged, let endedOnly):
                 self.purge(purged)
@@ -51,7 +58,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             case .received(let id): self.confirmPhoneStorage(id)
             case .purge(let ids):
                 self.purge(ids)
-            case .updated: break
+            case .updated: self.reload(); self.queueProcessing()
+            case .process(let ids, let revision): self.requestProcessing(ids, revision: revision)
             }
         }
     }
@@ -76,7 +84,11 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     override init() {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-watch-simulation") {
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
+            let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalProcessingTests")
+            try? FileManager.default.removeItem(at: root)
+            store = JournalStore(root: root)
+        } else if ProcessInfo.processInfo.arguments.contains("-journal-watch-simulation") {
             let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalWatchUITests")
             try? FileManager.default.removeItem(at: root)
             store = JournalStore(root: root)
@@ -94,6 +106,9 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             Task { @MainActor [weak self] in self?.finish(interrupted: true) }
         }
         reload()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") { return }
+        #endif
         transfer.activate()
     }
 
@@ -134,7 +149,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
     }
 
-    private func reload() {
+    func reload() {
         do {
             try store.recoverEvictions()
             for id in try store.pendingPurgeIDs() {
@@ -147,6 +162,10 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
                 return try finalize(entry, interrupted: true)
             }.filter { $0.state != .recording && $0.rawDeletedAt == nil && !($0.storage == .phone && $0.localEvictedAt != nil) }
             report = try store.report()
+            watchMinutes = [:]
+            for entry in try store.list(limit: 30) {
+                if let job = try store.analysis(entry.id), job.state == .complete { watchMinutes[entry.id] = job.minutes }
+            }
         } catch {
             message = error.localizedDescription
         }
@@ -155,6 +174,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     func start() async {
         guard !starting, current == nil else { return }
         starting = true
+        pauseProcessing()
         defer { starting = false }
 
         let session = AVAudioSession.sharedInstance()
@@ -200,15 +220,21 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             finish(interrupted: true)
         }
         queueRecordings()
+        queueProcessing()
     }
     func refreshStorageInBackground() async {
         nextStorageRefresh = nil
         checkRecording()
         await cloudStorage.waitForCompletion()
+        await waitForProcessing()
     }
-    func waitForCloudStorage() async { await cloudStorage.waitForCompletion() }
+    func waitForCloudStorage() async {
+        await cloudStorage.waitForCompletion()
+        await waitForProcessing()
+    }
     func pauseBackgroundStorage() {
         cloudStorage.pause()
+        pauseProcessing()
         scheduleStorage(at: .now.addingTimeInterval(900))
     }
 
@@ -284,6 +310,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
                 purge(ids)
             }
             if saved.isPlayable { queueRecordings() }
+            queueProcessing()
         } catch {
             message = error.localizedDescription
         }
@@ -305,6 +332,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         var queuedPhone = false
         var failed = false
         for entry in recordings where entry.isPlayable {
+            if entry.phoneReceivedAt != nil, entry.storage == .phone { continue }
             if request?.known.contains(entry.id) == true {
                 if entry.storage == .phone { confirmPhoneStorage(entry.id) }
                 continue
@@ -326,7 +354,12 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             scheduleStorage(at: max(next, .now.addingTimeInterval(60)))
         }
         if recordings.contains(where: { $0.storage == .cloud && $0.isPlayable }) {
-            cloudStorage.run(store: store) { [weak self] status, retry in
+            cloudStorage.run(store: store, mayRelease: { [weak self] id in
+                guard let self else { return false }
+                return !self.processingMode.retainsWatchAudio(
+                    completed: (try? self.store.analysis(id)?.state) == .complete,
+                    forwardedForProcessing: (try? self.store.recording(id).awaitingWatchResult) == true)
+            }) { [weak self] status, retry in
                 guard let self else { return }
                 self.storageStatus = status ?? "云端保存已确认"
                 self.reload()
@@ -347,7 +380,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         } catch { scheduleStorage(at: .now.addingTimeInterval(900)) }
     }
 
-    private func scheduleStorage(at date: Date) {
+    func scheduleStorage(at date: Date) {
         if let existing = nextStorageRefresh, existing > .now, existing <= date { return }
         nextStorageRefresh = date
         WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: date, userInfo: nil) { _ in }
@@ -356,7 +389,10 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     private func confirmPhoneStorage(_ id: UUID) {
         guard let entry = recordings.first(where: { $0.id == id }), entry.storage == .phone else { return }
         do {
-            try store.evictLocal(id)
+            var saved = try store.recording(id)
+            saved.phoneReceivedAt = .now
+            try store.save(saved)
+            releaseConfirmedAudio()
             reload()
         } catch {
             message = error.localizedDescription
@@ -406,7 +442,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     @discardableResult
     func delete(_ entry: Recording) -> Bool {
-        if transfer.isQueued(entry.id) || (entry.storage == .cloud && cloudStorage.uploading) {
+        if processingID == entry.id || transfer.isQueued(entry.id) || (entry.storage == .cloud && cloudStorage.uploading) {
             message = "录音正在传输。传输结束后可删除。"
             return false
         }

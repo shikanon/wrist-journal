@@ -12,6 +12,9 @@ struct WristJournalWatch: App {
             WatchHome(journal: delegate.journal)
                 .task {
                     #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
+                        await delegate.journal.runProcessingSimulation()
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-journal-watch-simulation") {
                         await delegate.journal.runSimulation()
                     }
@@ -19,6 +22,7 @@ struct WristJournalWatch: App {
                 }
                 .onChange(of: phase) {
                     if phase == .active { delegate.journal.checkRecording() }
+                    if phase == .background { delegate.journal.pauseBackgroundStorage() }
                 }
         }
     }
@@ -162,6 +166,22 @@ private struct WatchLibrary: View {
 
     var body: some View {
         List {
+            Section("数据处理") {
+                Text(journal.processingMode.title).font(.footnote)
+                if let status = journal.processingStatus { Text(status).font(.caption2) }
+                if journal.processingMode == .watch {
+                    Button("处理已结束日期") {
+                        journal.requestProcessing(journal.recordings.filter { JournalDayKey(recording: $0).hasEnded() }.map(\.id))
+                    }
+                    .disabled(journal.current != nil || journal.starting)
+                    Text("将使用手机配置的接口上传录音并生成纪要。").font(.caption2)
+                }
+                ForEach(journal.watchMinutes.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
+                    NavigationLink(String((journal.watchMinutes[id] ?? "查看纪要").prefix(28))) {
+                        ScrollView { Text(journal.watchMinutes[id] ?? "").padding() }
+                    }
+                }
+            }
             Section("健康") {
                 NavigationLink {
                     WatchHealth(journal: journal)

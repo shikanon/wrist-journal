@@ -1,0 +1,9 @@
+{
+  "requests": 3,
+  "passed": true,
+  "compressedBytes": 27619,
+  "watchAnalyzerExecuted": true,
+  "unauthorizedCheckpointResumed": true,
+  "sourceTimePreserved": true,
+  "durableResultAcknowledged": true
+}

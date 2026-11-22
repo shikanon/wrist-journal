@@ -13,8 +13,11 @@ struct JournalReviewView: View {
                     Text("每周").tag(1)
                     Text("每月").tag(2)
                 }.pickerStyle(.segmented)
-                Button("分析已结束日期") { confirm = true }
-                    .disabled(journal.processingDays || journal.hasAnalysisWorker)
+                Button(journal.processingMode == .watch ? "请求 Watch 处理并归档" : "分析已结束日期") { confirm = true }
+                    .disabled(journal.processingMode == .none || journal.processingDays || journal.hasAnalysisWorker)
+                if journal.processingMode == .none {
+                    Text("当前不处理，原音保留。请在设置中打开 Mac 临时下载。").font(.footnote)
+                }
                 if journal.processingDays { ProgressView("正在分析，已完成分段会保存进度") }
                 if let status = journal.dailyStatus { Text(status).font(.footnote).foregroundStyle(.secondary) }
             } footer: {

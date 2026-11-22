@@ -6,6 +6,20 @@
 	};
 	objectVersion = 56;
 	objects = {
+		D10000000000000000000008 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisFixture.swift; sourceTree = "<group>"; };
+		D10000000000000000000009 = { isa = PBXBuildFile; fileRef = D10000000000000000000008; };
+		D1000000000000000000000A = { isa = PBXBuildFile; fileRef = D10000000000000000000008; };
+		D1000000000000000000000B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingSimulation.swift; sourceTree = "<group>"; };
+		D1000000000000000000000C = { isa = PBXBuildFile; fileRef = D1000000000000000000000B; };
+		D1000000000000000000000D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchProcessingSimulation.swift; sourceTree = "<group>"; };
+		D1000000000000000000000E = { isa = PBXBuildFile; fileRef = D1000000000000000000000D; };
+		D10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingPolicy.swift; sourceTree = "<group>"; };
+		D10000000000000000000002 = { isa = PBXBuildFile; fileRef = D10000000000000000000001; };
+		D10000000000000000000003 = { isa = PBXBuildFile; fileRef = D10000000000000000000001; };
+		D10000000000000000000004 = { isa = PBXBuildFile; fileRef = B10000000000000000000004; };
+		D10000000000000000000005 = { isa = PBXBuildFile; fileRef = DF7DDCE22CF3481B852B68AE; };
+		D10000000000000000000006 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchProcessing.swift; sourceTree = "<group>"; };
+		D10000000000000000000007 = { isa = PBXBuildFile; fileRef = D10000000000000000000006; };
 		C1000000000000000000000F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSimulation.swift; sourceTree = "<group>"; };
 		C10000000000000000000010 = { isa = PBXBuildFile; fileRef = C1000000000000000000000F; };
 		C10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoragePolicy.swift; sourceTree = "<group>"; };
@@ -268,6 +282,10 @@
 			path = Shared;
 			sourceTree = "<group>";
 			children = (
+				D10000000000000000000008,
+				D10000000000000000000001,
+				B10000000000000000000004,
+				DF7DDCE22CF3481B852B68AE,
 				C10000000000000000000001,
 				A1000000000000000000000B,
 				B10000000000000000000001,
@@ -309,13 +327,13 @@
 			path = Phone;
 			sourceTree = "<group>";
 			children = (
+				D1000000000000000000000B,
 				C10000000000000000000007,
 				C1000000000000000000000F,
 				C10000000000000000000009,
 				C1000000000000000000000B,
 				C1000000000000000000000D,
 				B1000000000000000000000A,
-				B10000000000000000000004,
 				B10000000000000000000008,
 				A10000000000000000000007,
 				A10000000000000000000009,
@@ -326,7 +344,6 @@
 				E2C912A5B09B533C9B47E76E,
 				4D0D9A704AF45790A2748199,
 				2C0BF1CC7F755CF3AC1C8286,
-				DF7DDCE22CF3481B852B68AE,
 				BEE992873A164E09BCACCCB1,
 			);
 		};
@@ -371,6 +388,8 @@
 			path = Watch;
 			sourceTree = "<group>";
 			children = (
+				D1000000000000000000000D,
+				D10000000000000000000006,
 				C10000000000000000000004,
 				B10000000000000000000006,
 				DE50420CAAA2504EB9460349,
@@ -424,6 +443,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D1000000000000000000000A,
+				D1000000000000000000000E,
+				D10000000000000000000003,
+				D10000000000000000000004,
+				D10000000000000000000005,
+				D10000000000000000000007,
 				C10000000000000000000003,
 				C10000000000000000000005,
 				C10000000000000000000006,
@@ -600,6 +625,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000009,
+				D1000000000000000000000C,
+				D10000000000000000000002,
 				C10000000000000000000002,
 				C10000000000000000000008,
 				C10000000000000000000010,

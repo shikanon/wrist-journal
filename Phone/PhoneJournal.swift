@@ -23,6 +23,7 @@ final class PhoneJournal: ObservableObject {
             dailySettings.save()
             AnalysisScheduling.schedule(settings: dailySettings)
             if !dailySettings.automatic { automaticDailyTask?.cancel() }
+            processingChanged()
             publishStorage()
         }
     }
@@ -34,13 +35,13 @@ final class PhoneJournal: ObservableObject {
         }
     }
     @Published var credential = ArkCredential(rawValue: UserDefaults.standard.string(forKey: "arkCredential") ?? "") ?? .official {
-        didSet { UserDefaults.standard.set(credential.rawValue, forKey: "arkCredential") }
+        didSet { UserDefaults.standard.set(credential.rawValue, forKey: "arkCredential"); processingChanged() }
     }
     @Published var model = UserDefaults.standard.string(forKey: "arkModel") ?? MeetingAnalyzer.defaultModel {
-        didSet { UserDefaults.standard.set(model, forKey: "arkModel") }
+        didSet { UserDefaults.standard.set(model, forKey: "arkModel"); processingChanged() }
     }
     @Published var includeContext = UserDefaults.standard.bool(forKey: "includeMeetingContext") {
-        didSet { UserDefaults.standard.set(includeContext, forKey: "includeMeetingContext") }
+        didSet { UserDefaults.standard.set(includeContext, forKey: "includeMeetingContext"); processingChanged() }
     }
     @Published var message: String?
 
@@ -57,10 +58,50 @@ final class PhoneJournal: ObservableObject {
     private var worker: Task<Void, Never>?
     private var automaticDailyTask: Task<Void, Never>?
     private var automaticWorkRequested = false
+    var dailyAnalysisTask: Task<MeetingAnalysisJob, Error>?
+    var processingGeneration = UUID()
+    @Published var watchConfigurationStatus = "等待与手表同步"
+    var processingMode: ProcessingMode { dailySettings.mode }
+    var processingConfiguration: ProcessingConfiguration {
+        var config = ProcessingConfiguration()
+        config.mode = processingMode
+        config.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if config.model.isEmpty { config.model = MeetingAnalyzer.defaultModel }
+        config.credential = credential.rawValue
+        if let revision = UserDefaults.standard.string(forKey: "processingRevision") { config.revision = revision }
+        else { UserDefaults.standard.set(config.revision, forKey: "processingRevision") }
+        config.automatic = dailySettings.automatic
+        config.chargingOnly = dailySettings.chargingOnly
+        config.wifiOnly = dailySettings.wifiOnly ?? true
+        config.skipSilence = dailySettings.skipSilence ?? true
+        config.audioFormat = dailySettings.audioFormat ?? .automatic
+        config.includeContext = includeContext
+        return config
+    }
+    private func processingChanged() {
+        processingGeneration = UUID()
+        UserDefaults.standard.set(UUID().uuidString, forKey: "processingRevision")
+        watchConfigurationStatus = "设置已更新，等待手表同步"
+        worker?.cancel()
+        dailyAnalysisTask?.cancel()
+        automaticDailyTask?.cancel()
+        try? transfer.publishProcessing(processingConfiguration)
+    }
+    func requirePhoneProcessing() throws {
+        try Task.checkCancellation()
+        guard processingMode.allowsModel(on: .phone) else { throw CancellationError() }
+    }
+    func requestWatchProcessing(_ entries: [Recording], manual: Bool) throws {
+        guard processingMode == .watch else { throw CancellationError() }
+        try transfer.publishProcessing(processingConfiguration)
+        try transfer.requestProcessing(entries, manual: manual)
+        dailyStatus = "已请求 Watch 处理，录音和结果会在设备可用时同步。"
+    }
     var hasAnalysisWorker: Bool { worker != nil }
 
     func foregroundEntered() {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") { return }
         if ProcessInfo.processInfo.arguments.contains("-journal-fixture") ||
             ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { return }
         #endif
@@ -85,7 +126,9 @@ final class PhoneJournal: ObservableObject {
         AnalysisScheduling.schedule(settings: dailySettings)
     }
 
-    private lazy var transfer = CompanionTransfer(store: store) { [weak self] event in
+    private lazy var transfer = CompanionTransfer(store: store, credentialProvider: { [weak self] revision in
+        await self?.watchCredential(revision)
+    }) { [weak self] event in
         Task { @MainActor [weak self] in
             switch event {
             case .updated:
@@ -103,13 +146,25 @@ final class PhoneJournal: ObservableObject {
                 if UIApplication.shared.applicationState == .active { self?.scheduleSourceSync() }
             case .purgeAcknowledged(let ids):
                 try? self?.store.acknowledgePurge(ids)
+            case .credentialReady(let revision):
+                if self?.processingConfiguration.revision == revision { self?.watchConfigurationStatus = "手表已确认当前 API 配置" }
             }
         }
+    }
+    private func watchCredential(_ revision: String) -> (Data, String)? {
+        let config = processingConfiguration
+        guard config.mode == .watch, config.revision == revision,
+              let key = credential.load(), let data = try? JSONEncoder().encode(config) else { return nil }
+        return (data, key)
     }
 
     init() {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") {
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
+            let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalProcessingTests")
+            try? FileManager.default.removeItem(at: root)
+            store = JournalStore(root: root)
+        } else if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") {
             let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalStorageTests")
             try? FileManager.default.removeItem(at: root)
             store = JournalStore(root: root)
@@ -121,7 +176,11 @@ final class PhoneJournal: ObservableObject {
         #else
         store = JournalStore()
         #endif
+        let previousManagedKey = ArkCredential.official.load()
         ArkCredential.loadManagedDefault()
+        if previousManagedKey != ArkCredential.official.load() {
+            UserDefaults.standard.set(UUID().uuidString, forKey: "processingRevision")
+        }
         hasOfficialKey = ArkCredential.official.load() != nil
         reload()
         for id in (try? store.unfinishedAnalysisIDs()) ?? [] { loadJob(id) }
@@ -131,6 +190,9 @@ final class PhoneJournal: ObservableObject {
             do { try seedSimulation() }
             catch { message = error.localizedDescription }
         }
+        #endif
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") { return }
         #endif
         transfer.activate()
     }
@@ -253,7 +315,10 @@ final class PhoneJournal: ObservableObject {
         }
     }
 
-    private func publishStorage() { try? transfer.publishSettings(storage: storage, settings: dailySettings) }
+    private func publishStorage() {
+        try? transfer.publishSettings(storage: storage, settings: dailySettings)
+        try? transfer.publishProcessing(processingConfiguration)
+    }
 
     var analysisConfiguration: String {
         analysisConfiguration(model: model, credential: credential.rawValue)
@@ -286,6 +351,7 @@ final class PhoneJournal: ObservableObject {
             try ArkCredential.personal.save(key)
             hasPersonalKey = true
             credential = .personal
+            processingChanged()
             return true
         } catch {
             message = error.localizedDescription
@@ -298,12 +364,19 @@ final class PhoneJournal: ObservableObject {
             try ArkCredential.personal.remove()
             hasPersonalKey = false
             if credential == .personal { credential = .official }
+            processingChanged()
         } catch {
             message = error.localizedDescription
         }
     }
 
     func analyze(_ entry: Recording) async {
+        guard processingMode != .none else { message = "当前不处理，请将数据导出到 Mac。"; return }
+        if processingMode == .watch {
+            do { try requestWatchProcessing([entry], manual: true); message = dailyStatus }
+            catch { message = error.localizedDescription }
+            return
+        }
         guard entry.isPlayable, jobs[entry.id]?.state != .queued || worker == nil else { return }
         guard credential.load() != nil else {
             message = AnalysisError.missingCredential.localizedDescription
@@ -338,34 +411,41 @@ final class PhoneJournal: ObservableObject {
 
     func resumeAnalysis() {
         // Legacy jobs have no source flag. Only explicitly manual jobs may bypass automatic policy.
-        guard worker == nil, !processingDays, jobs.values.contains(where: { $0.state == .queued && $0.automatic == false }) else { return }
+        guard processingMode == .phone, worker == nil, !processingDays, jobs.values.contains(where: { $0.state == .queued && $0.automatic == false }) else { return }
         worker = Task { [weak self] in await self?.runAnalysis() }
     }
 
     private func runAnalysis() async {
         defer { worker = nil; analyzing = nil }
         while let id = jobs.first(where: { $0.value.state == .queued && $0.value.automatic == false })?.key,
+              !Task.isCancelled, processingMode == .phone,
               let entry = try? store.recording(id),
               var job = jobs[entry.id] {
             analyzing = entry.id
             let configuration = analysisConfiguration(model: job.model, credential: job.credential)
             do {
+                try requirePhoneProcessing()
+                job.processor = .phone
                 guard let key = ArkCredential(rawValue: job.credential)?.load() else {
                     throw AnalysisError.missingCredential
                 }
                 let result = try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key,
-                    format: dailySettings.audioFormat ?? .automatic, skipSilence: dailySettings.skipSilence ?? true) {
+                    format: dailySettings.audioFormat ?? .automatic, skipSilence: dailySettings.skipSilence ?? true,
+                    beforeRequest: { [weak self] in try await self?.requirePhoneProcessing() }) {
                     [weak self] snapshot in
                     try await self?.save(snapshot, for: entry.id)
                 }
+                try requirePhoneProcessing()
                 try save(result, for: entry.id)
             } catch {
                 job = jobs[entry.id] ?? job
                 job.state = .failed
                 job.error = error.localizedDescription
-                var retry = job.retry ?? RetryState()
-                retry.fail(configuration: configuration, authentication: isAuthenticationError(error))
-                job.retry = retry
+                if !Task.isCancelled, !(error is CancellationError) {
+                    var retry = job.retry ?? RetryState()
+                    retry.fail(configuration: configuration, authentication: isAuthenticationError(error))
+                    job.retry = retry
+                }
                 do { try save(job, for: entry.id) }
                 catch {
                     jobs[entry.id] = job
@@ -385,7 +465,7 @@ final class PhoneJournal: ObservableObject {
             let page = try store.list(limit: recordingLimit + 1)
             hasMoreRecordings = page.count > recordingLimit
             recordings = Array(page.prefix(recordingLimit))
-            for entry in recordings where jobs[entry.id] == nil { loadJob(entry.id) }
+            for entry in recordings { loadJob(entry.id) }
             report = try store.report()
             let history = try store.dailyReports(limit: dayLimit + 1)
             hasMoreDays = history.count > dayLimit
@@ -416,8 +496,14 @@ final class PhoneJournal: ObservableObject {
     }
 
     func analyzeForDay(_ entry: Recording, automatic: Bool = false, externalPowerGranted: Bool = false) async throws -> MeetingAnalysisJob {
-        if jobs[entry.id] == nil { loadJob(entry.id) }
+        guard processingMode != .none else { throw CancellationError() }
+        loadJob(entry.id)
         if let job = jobs[entry.id], job.state == .complete, let minutes = job.minutes, !minutes.isEmpty { return job }
+        if processingMode == .watch {
+            try requestWatchProcessing([entry], manual: !automatic)
+            throw ProcessingDeferred.watch
+        }
+        try requirePhoneProcessing()
         let resolvedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         var job = MeetingAnalysisJob(
             model: resolvedModel.isEmpty ? MeetingAnalyzer.defaultModel : resolvedModel,
@@ -434,21 +520,27 @@ final class PhoneJournal: ObservableObject {
         }
         job.state = .queued
         job.automatic = true
+        job.processor = .phone
         job.error = nil
         try save(job, for: entry.id)
         do {
             if automatic { try requireAutomaticUpload(externalPowerGranted: externalPowerGranted) }
             guard let key = ArkCredential(rawValue: job.credential)?.load() else { throw AnalysisError.missingCredential }
-            let result = try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key,
+            let task = Task { [self, job] in try await analyzer.run(recording: entry, url: store.audio(entry.id), job: job, key: key,
                 format: dailySettings.audioFormat ?? .automatic, skipSilence: dailySettings.skipSilence ?? true,
                 wifiOnly: automatic && (dailySettings.wifiOnly ?? true),
                 beforeRequest: { [weak self] in
+                    try await self?.requirePhoneProcessing()
                     if automatic { try await self?.requireAutomaticUpload(externalPowerGranted: externalPowerGranted) }
                 }) {
                 [weak self] snapshot in
                 try await self?.saveDailyCheckpoint(snapshot, id: entry.id, automatic: automatic,
                                                      externalPowerGranted: externalPowerGranted)
-            }
+            } }
+            dailyAnalysisTask = task
+            defer { dailyAnalysisTask = nil }
+            let result = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            try requirePhoneProcessing()
             try save(result, for: entry.id)
             workState.uploadRetry = RetryState()
             try workState.save(store)
@@ -473,6 +565,7 @@ final class PhoneJournal: ObservableObject {
     private func saveDailyCheckpoint(_ job: MeetingAnalysisJob, id: UUID, automatic: Bool,
                                      externalPowerGranted: Bool) throws {
         try save(job, for: id)
+        try requirePhoneProcessing()
         if automatic && (!dailySettings.automatic ||
             !AnalysisScheduling.canRun(settings: dailySettings, externalPowerGranted: externalPowerGranted)) {
             throw CancellationError()

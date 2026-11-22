@@ -1,15 +1,15 @@
 {
-  "scenario": "storage-modes",
-  "cloudAcknowledgmentEvictsLocal": true,
-  "healthExcludedFromCloud": true,
+  "purgedCloudDoesNotRevive": true,
   "phoneAcknowledgmentEvictsWatch": true,
   "lateCloudMeetingMergesWithCleanedWatchDay": true,
-  "passed": true,
+  "healthExcludedFromCloud": true,
   "cloudTransport": "Debug local fixture",
-  "purgedCloudDoesNotRevive": true,
-  "cloudFailureRetainsOriginal": true,
-  "cloudImportIdempotent": true,
   "httpsTransport": "Network.framework TLS loopback",
+  "passed": true,
+  "cloudFailureRetainsOriginal": true,
+  "scenario": "storage-modes",
+  "cloudImportIdempotent": true,
+  "cloudAcknowledgmentEvictsLocal": true,
   "https": {
     "certificateAndIPVerified": true,
     "systemTrustRejectsUnknownCertificate": true,
@@ -20,6 +20,7 @@
     "downloadBytes": 196731,
     "authenticatedActivityExtendsLease": true,
     "unauthorizedActivityDoesNotExtendLease": true,
-    "idleTimeoutClosesListener": true
+    "idleTimeoutClosesListener": true,
+    "metadataAuthenticatedAndExported": true
   }
 }

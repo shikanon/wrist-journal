@@ -41,6 +41,7 @@ struct WristJournalPhone: App {
             .modifier(JournalNotice(message: $journal.message))
             .task {
                 #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") { await journal.runProcessingSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { await journal.runStorageSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-power-simulation") { await journal.runPowerSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") { await journal.runSimulation() }
@@ -117,7 +118,7 @@ private struct PhoneRecordings: View {
                 }
             }
         }
-        .fileExporter(isPresented: $exporting, document: Export.recordings(journal.recordings),
+        .fileExporter(isPresented: $exporting, document: Export.recordings(journal.recordings, store: journal.store),
                       contentType: .commaSeparatedText, defaultFilename: "WristJournal-Recordings") { result in
             if case .failure(let error) = result { journal.message = error.localizedDescription }
         }
@@ -229,8 +230,9 @@ private struct PhoneRecording: View {
                     }
                 }
             }
-            if entry.isPlayable, journal.jobs[id]?.state != .queued {
-                Button(journal.jobs[id] == nil ? "分析录音" : "重新分析") { confirmingAnalysis = true }
+            if entry.isPlayable, journal.jobs[id]?.state != .queued, journal.processingMode != .none {
+                Button(journal.processingMode == .watch ? "在 Watch 上处理" :
+                    (journal.jobs[id] == nil ? "分析录音" : "重新分析")) { confirmingAnalysis = true }
                     .disabled(journal.processingDays)
                     .confirmationDialog("发送到火山方舟进行分析？", isPresented: $confirmingAnalysis) {
                         Button("开始分析") { Task { await journal.analyze(entry) } }
@@ -251,6 +253,22 @@ private struct JournalSettings: View {
     var body: some View {
         Form {
             Section {
+                Picker("数据处理", selection: Binding(
+                    get: { journal.processingMode },
+                    set: { journal.dailySettings.processingMode = $0 })) {
+                    ForEach(ProcessingMode.allCases) { Text($0.title).tag($0) }
+                }
+                if journal.processingMode == .watch {
+                    Text(journal.watchConfigurationStatus).font(.footnote)
+                }
+            } footer: {
+                Text(journal.processingMode == .none ?
+                     "保留原音，不调用模型、不自动生成日报或清理。同步后可在「Mac 临时下载」导出原音和元数据，自行处理。" :
+                     journal.processingMode == .watch ?
+                     "Watch 直接调用下方配置的方舟接口，结果回传手机归档。首次同步 Key 请同时打开两端 App。离线手表收到设置后才切换；录音期间暂停处理，后台进度由系统安排。处理完成前会保留手表原音。" :
+                     "默认由手机调用模型；录音存储位置可独立选择。自动开关关闭时仍可手动处理。")
+            }
+            Section {
                 Picker("录音存储", selection: $journal.storage) {
                     ForEach(RecordingStorage.allCases) { Text($0.title).tag($0) }
                 }
@@ -268,7 +286,7 @@ private struct JournalSettings: View {
                 if let status = journal.storageSyncStatus { Text(status).font(.footnote) }
             } footer: {
                 Text(journal.storage == .cloud ?
-                     "选择云端即允许录音和地点保存到私人 iCloud；健康样本不上传。手表上传确认后释放原音，手机再读取分析。请求禁用蜂窝；系统可能经配对手机转发，无法强制手表直连 Wi-Fi。设置对后续录音生效。" :
+                     "选择云端即允许录音和地点保存到私人 iCloud；健康样本不上传。上传确认且手表处理不再需要时释放本机原音。请求禁用蜂窝；系统可能经配对手机转发。设置对后续录音生效。" :
                      "默认优先手表：手机定期拉取结束日期的录音。优先手机：手表安全暂存并批量发送，手机确认保存后释放手表副本。设置对后续录音生效；系统决定实际后台执行时间，录音期间暂停自动大文件传输。")
             }
             Section("火山方舟") {

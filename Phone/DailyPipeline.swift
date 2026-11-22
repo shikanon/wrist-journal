@@ -14,6 +14,8 @@ struct DailySettings: Codable {
     var audioFormat: AudioUploadFormat?
     var batchMinutes: Int?
     var localAccessMinutes: Int?
+    var processingMode: ProcessingMode?
+    var mode: ProcessingMode { processingMode ?? .phone }
 
     static func load() -> Self {
         guard let data = UserDefaults.standard.data(forKey: "dailySettings"),
@@ -46,8 +48,13 @@ struct DailyWorkState: Codable {
 extension PhoneJournal {
     /// One serial executor for both manual meeting work and daily work.
     func processDays(automatic: Bool, externalPowerGranted: Bool = false) async -> Bool {
+        guard processingMode != .none else {
+            dailyStatus = "不处理模式：原音已保留，可导出到 Mac。"
+            return false
+        }
         guard !processingDays, !hasAnalysisWorker else { return false }
         let settings = dailySettings
+        let generation = processingGeneration
         if automatic {
             guard (settings.automatic || settings.healthEnabled),
                   AnalysisScheduling.canRun(settings: settings, externalPowerGranted: externalPowerGranted)
@@ -58,6 +65,7 @@ extension PhoneJournal {
         do {
             // Local work comes first and does not depend on upload policy, credentials or cloud availability.
             let healthSamples = try await refreshLocalHealth()
+            guard generation == processingGeneration else { throw CancellationError() }
             if automatic && !settings.automatic {
                 dailyStatus = "健康本地统计已更新。"
                 return true
@@ -84,16 +92,28 @@ extension PhoneJournal {
                     let previousIDs = Set(previous?.meetings.map(\.id) ?? [])
                     let pending = entries.filter { $0.rawDeletedAt == nil && !previousIDs.contains($0.id) }
                     // Interrupted files can be analyzed; damaged/incomplete recordings block this day's cleanup.
-                    guard pending.allSatisfy(\.isPlayable) else {
+                    guard try pending.allSatisfy({ entry in
+                        if entry.isPlayable { return true }
+                        return try store.analysis(entry.id)?.state == .complete
+                    }) else {
                         deferred.append("\(day.localDate) 有不完整录音，原音已保留。")
                         continue
                     }
                     dailyStatus = "正在整理 \(day.localDate) · \(day.timeZoneIdentifier)"
                     var meetings = previous?.meetings ?? []
                     var analyzed: [(Recording, MeetingAnalysisJob)] = []
+                    if processingMode == .watch {
+                        let waiting = try pending.filter { try store.analysis($0.id)?.state != .complete }
+                        if !waiting.isEmpty {
+                            try requestWatchProcessing(waiting, manual: !automatic)
+                            deferred.append("\(day.localDate)：等待 Watch 完成 \(waiting.count) 段录音")
+                            continue
+                        }
+                    }
                     for entry in pending {
                         try Task.checkCancellation()
                         let job = try await analyzeForDay(entry, automatic: automatic, externalPowerGranted: externalPowerGranted)
+                        guard generation == processingGeneration else { throw CancellationError() }
                         if automatic && !AnalysisScheduling.canRun(settings: settings, externalPowerGranted: externalPowerGranted) {
                             throw CancellationError()
                         }
@@ -111,6 +131,7 @@ extension PhoneJournal {
                             healthNote: health.note ?? ((job.speechWindows ?? []).isEmpty ? "没有可用的激动说话时间线索，未做语音与心率关联。" : nil),
                             speechWindows: job.speechWindows ?? []))
                     }
+                    guard generation == processingGeneration else { throw CancellationError() }
                     guard (!meetings.isEmpty || settings.healthEnabled), let interval = day.interval else { continue }
                     let healthDay = previous?.health ?? HealthDay(start: healthKey.interval?.start ?? interval.start, localDate: day.localDate)
                     var report = previous ?? DailyJournalReport(day: day, generatedAt: .now, meetings: [],
@@ -172,6 +193,7 @@ extension PhoneJournal {
                         continue
                     }
                     try Task.checkCancellation()
+                    guard generation == processingGeneration, processingMode != .none else { throw CancellationError() }
                     _ = try store.purgeDaily(day)
                     for meeting in report.meetings { try compactAnalysis(meeting.id) }
                     try store.completeCleanup(day)
