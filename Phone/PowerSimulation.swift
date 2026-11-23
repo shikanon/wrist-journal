@@ -45,6 +45,16 @@ extension PhoneJournal {
             try require(silentJob.state == .complete && silentJob.totalChunks == 0, "silence completes without network")
 
             guard let entry = recordings.first else { throw JournalError.invalidTransfer }
+            let citation = SourceCitation(id: UUID(), recordingID: entry.id, startSeconds: 20, endSeconds: 25,
+                statement: "保留来源", quote: "这是一条模拟转写原文。")
+            guard var sourceJob = try store.analysis(entry.id) else { throw JournalError.invalidTransfer }
+            sourceJob.citations = [citation]
+            try save(sourceJob, for: entry.id)
+            var marked = entry
+            _ = marked.addMarker(at: 20)
+            marked.continuation = RecordingContinuation(sessionID: UUID(), previousRecordingID: UUID(),
+                gapStartedAt: entry.startedAt.addingTimeInterval(-15), resumedAt: entry.startedAt)
+            try store.save(marked)
             stage = "daily reuse"
             try require(await processDays(automatic: false), "initial daily completion")
             let counts = await dailyHealth.simulationReads()
@@ -60,6 +70,10 @@ extension PhoneJournal {
             try require(await processDays(automatic: false), "late health refresh")
             let updated = try store.daily(JournalDayKey(recording: entry))
             try require(updated?.meetings.first?.events.first?.peakBPM == 145, "late heart sample updates archived event")
+            try require(updated?.meetings.first?.citations == [citation] &&
+                updated?.meetings.first?.markers == marked.markers &&
+                updated?.meetings.first?.continuation?.gapDuration == 15,
+                "health refresh preserves citations markers and recording gap")
             try require(updated?.cleanupCompletedAt != nil &&
                 !FileManager.default.fileExists(atPath: store.audio(entry.id).path), "late health never restores raw audio")
             let afterLate = await dailyHealth.simulationReads()
@@ -92,7 +106,8 @@ extension PhoneJournal {
                 "m4aBytes": compressed.count, "wavBytes": wav.count, "encodedDuration": encodedDuration,
                 "silentRequests": 0, "completedDayReused": true, "lateHealthUpdated": true,
                 "healthWithoutAPIKey": true, "wholeM4AReused": true,
-                "removedHealthCorrected": true, "legacyQueueDeferred": true]
+                "removedHealthCorrected": true, "legacyQueueDeferred": true,
+                "healthRefreshPreservesSources": true]
         } catch { evidence = ["passed": false, "error": error.localizedDescription, "stage": stage] }
         try? JSONSerialization.data(withJSONObject: evidence, options: .prettyPrinted).write(to: resultURL, options: .atomic)
     }

@@ -1,0 +1,6 @@
+{
+  "passed": true,
+  "coldStartNeverResumesMicrophone": true,
+  "receiptRestoredAfterLaunch": true,
+  "staleWaitingReceiptCleared": true
+}

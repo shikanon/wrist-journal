@@ -21,6 +21,31 @@ struct Recording: Codable, Identifiable, Sendable {
     var remoteAnalysisComplete: Bool?
     var watchProcessingReceivedAt: Date?
     var awaitingWatchResult: Bool?
+    var markers: [RecordingMarker]?
+    var continuation: RecordingContinuation?
+
+    var validTimeline: Bool {
+        let values = markers ?? []
+        guard Set(values.map(\.id)).count == values.count,
+              values.allSatisfy({ $0.offset.isFinite && $0.offset >= 0 && $0.offset <= duration + 1
+                  && !$0.label.isEmpty && $0.label.count <= 200 }) else { return false }
+        if let continuation {
+            return continuation.previousRecordingID != id &&
+                continuation.gapStartedAt.timeIntervalSince1970.isFinite &&
+                continuation.resumedAt.timeIntervalSince1970.isFinite &&
+                continuation.resumedAt == startedAt &&
+                continuation.gapStartedAt <= continuation.resumedAt
+        }
+        return true
+    }
+
+    mutating func addMarker(at offset: TimeInterval) -> RecordingMarker? {
+        guard offset.isFinite, offset >= 0,
+              (markers?.last.map { offset - $0.offset >= 1 } ?? true) else { return nil }
+        let marker = RecordingMarker(id: UUID(), offset: offset, label: "标记 \((markers?.count ?? 0) + 1)")
+        markers = (markers ?? []) + [marker]
+        return marker
+    }
 
     var isPlayable: Bool { rawDeletedAt == nil && localEvictedAt == nil && (state == .saved || state == .interrupted) }
     var needsLocalProcessing: Bool {
@@ -30,6 +55,21 @@ struct Recording: Codable, Identifiable, Sendable {
     var title: String {
         note.isEmpty ? startedAt.formatted(date: .abbreviated, time: .shortened) : note
     }
+}
+
+struct RecordingMarker: Codable, Identifiable, Sendable, Equatable {
+    let id: UUID
+    let offset: TimeInterval
+    let label: String
+}
+
+struct RecordingContinuation: Codable, Sendable {
+    let sessionID: UUID
+    let previousRecordingID: UUID
+    let gapStartedAt: Date
+    let resumedAt: Date
+    var gapDuration: TimeInterval { max(0, resumedAt.timeIntervalSince(gapStartedAt)) }
+    var detail: String { "中断后续录 · 中间约 \(durationText(gapDuration)) 未录制" }
 }
 
 enum RecordingStorage: String, Codable, CaseIterable, Identifiable, Sendable {

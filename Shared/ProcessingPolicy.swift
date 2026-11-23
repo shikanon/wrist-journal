@@ -82,6 +82,7 @@ struct MeetingAnalysisJob: Codable, Sendable {
     var uploadedBytes: Int?
     var processor: ProcessingMode?
     var resultID: UUID?
+    var citations: [SourceCitation]?
 }
 
 struct ProcessingResult: Codable, Sendable {
@@ -97,6 +98,8 @@ struct ProcessingResult: Codable, Sendable {
               job.processor == .watch, job.resultID == id, job.state == .complete,
               let minutes = job.minutes, !minutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               minutes.utf8.count <= 2_000_000,
+              (job.citations ?? []).allSatisfy({ $0.isValid(for: recording) }),
+              recording.validTimeline,
               (job.speechWindows ?? []).allSatisfy({
                   $0.start.timeIntervalSince1970.isFinite && $0.end.timeIntervalSince1970.isFinite &&
                   $0.start >= recording.startedAt && $0.end > $0.start &&

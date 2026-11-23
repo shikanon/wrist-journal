@@ -1,0 +1,14 @@
+{
+  "cleanedAudioExplicit": true,
+  "phoneModelRequests": 0,
+  "noneRetainsRaw": true,
+  "noneBlocksRequestBoundary": true,
+  "nonePausesPreviouslyCommittedCleanup": true,
+  "watchResultArchived": true,
+  "citationsAndMarkersSurviveCleanup": true,
+  "retentionSettingAppliedAndReversible": true,
+  "passed": true,
+  "metadataOnlyRecordingSupported": true,
+  "metadataExported": true,
+  "duplicateResultIgnored": true
+}

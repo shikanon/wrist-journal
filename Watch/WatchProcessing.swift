@@ -19,7 +19,7 @@ extension WatchJournal {
     func queueProcessing() {
         let config = transfer.processing
         if activeProcessingConfiguration != config { pauseProcessing() }
-        guard current == nil, !starting else { pauseProcessing(); return }
+        guard current == nil, !starting, recovery.pending == nil else { pauseProcessing(); return }
         try? transfer.sendResults()
         if ((try? store.pendingResults().count) ?? 0) > 0 {
             scheduleStorage(at: .now.addingTimeInterval(900))
@@ -136,7 +136,7 @@ extension WatchJournal {
     func requireWatchProcessing(_ config: ProcessingConfiguration, manual: Bool) throws {
         try Task.checkCancellation()
         guard transfer.processing == config, config.mode.allowsModel(on: .watch),
-              current == nil, !starting else { throw CancellationError() }
+              current == nil, !starting, recovery.pending == nil else { throw CancellationError() }
         if !manual {
             let device = WKInterfaceDevice.current()
             device.isBatteryMonitoringEnabled = true

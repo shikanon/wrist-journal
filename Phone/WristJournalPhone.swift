@@ -17,6 +17,7 @@ struct WristJournalPhone: App {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { _tab = State(initialValue: 3) }
         if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-sources-preview") ||
             ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { _tab = State(initialValue: 2) }
         #endif
     }
@@ -143,6 +144,14 @@ private struct PhoneRecording: View {
                     if entry.state == .interrupted {
                         Text("录音中断，已保存可播放部分。").foregroundStyle(.secondary)
                     }
+                    if let continuation = entry.continuation {
+                        Text(continuation.detail).foregroundStyle(.orange)
+                        if journal.recordings.contains(where: { $0.id == continuation.previousRecordingID }) {
+                            NavigationLink("查看中断前一段") {
+                                PhoneRecording(journal: journal, id: continuation.previousRecordingID)
+                            }
+                        }
+                    }
                     if !entry.note.isEmpty { Text(entry.note).textSelection(.enabled) }
                     if let location = entry.location {
                         Text("会议地点（粗略）：\(location.description)").textSelection(.enabled)
@@ -185,6 +194,12 @@ private struct PhoneRecording: View {
                     Text("日报已保存，原音已按设置清理。会议纪要和地点可继续查看。").foregroundStyle(.secondary)
                 }
                 meetingAnalysis(entry)
+                if journal.jobs[id]?.state == .complete || !(entry.markers ?? []).isEmpty {
+                    Section("标记与原文引用") {
+                        RecordingSourcesView(store: journal.store, recordingID: id,
+                            citations: journal.jobs[id]?.citations ?? [], markers: entry.markers ?? [], playback: playback)
+                    }
+                }
                 Button("删除录音", role: .destructive) { confirmingDelete = true }
                     .disabled(journal.processingDays)
                     .confirmationDialog("删除 iPhone 上的录音？", isPresented: $confirmingDelete) {
@@ -226,7 +241,9 @@ private struct PhoneRecording: View {
                 case .complete:
                     if let minutes = job.minutes {
                         Text(minutes).textSelection(.enabled)
-                        ShareLink(item: minutes) { Label("分享会议纪要", systemImage: "square.and.arrow.up") }
+                        ShareLink(item: ([minutes] + (job.citations ?? []).map(\.shareText)).joined(separator: "\n\n")) {
+                            Label("分享纪要与来源", systemImage: "square.and.arrow.up")
+                        }
                     }
                 }
             }
@@ -329,6 +346,11 @@ private struct JournalSettings: View {
                 Toggle("跳过明确的长静音", isOn: Binding(
                     get: { journal.dailySettings.skipSilence ?? true },
                     set: { journal.dailySettings.skipSilence = $0 }))
+                Toggle("日报后保留原音", isOn: Binding(
+                    get: { journal.dailySettings.keepReviewAudio ?? false },
+                    set: { journal.dailySettings.keepReviewAudio = $0 }))
+                Text("开启后可回听标记与来源，会继续占用存储。关闭后，下次每日分析会清理已归档且完成所需备份的原音；已清理音频不能恢复。")
+                    .font(.footnote).foregroundStyle(.secondary)
                 Toggle("读取健康与运动数据", isOn: $journal.dailySettings.healthEnabled)
                     .onChange(of: journal.dailySettings.healthEnabled) {
                         if journal.dailySettings.healthEnabled { Task { await journal.authorizeDailyHealth() } }
@@ -342,7 +364,7 @@ private struct JournalSettings: View {
             } header: {
                 Text("每日分析与存储")
             } footer: {
-                Text("开启自动分析即允许将结束日期的录音分段发送到火山方舟。日报成功保存后清理两端原音；云备份开启时先备份录音与地点到私人 iCloud，备份失败会保留原音。健康样本仅在本地关联，不上传 iCloud。后台时机由系统安排，打开 App 可补跑。")
+                Text("开启自动分析即允许将结束日期的录音分段发送到火山方舟。默认在日报成功后清理两端原音；可开启保留原音支持回听。云备份开启时先备份录音与地点到私人 iCloud，备份失败会保留原音。健康样本仅在本地关联，不上传 iCloud。后台时机由系统安排，打开 App 可补跑。")
             }
             .disabled(journal.processingDays)
             Section {

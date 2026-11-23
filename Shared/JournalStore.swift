@@ -18,7 +18,7 @@ private struct DailyIndex: Codable {
     let meetingRanges: [DateInterval]
     init(_ report: DailyJournalReport) {
         day = report.day
-        cleanupPending = !report.meetings.isEmpty && report.cleanupCompletedAt == nil
+        cleanupPending = !report.meetings.isEmpty && report.cleanupCompletedAt == nil && report.retainsAudio != true
         healthRange = JournalDayKey(localDate: report.day.localDate,
             timeZoneIdentifier: report.healthTimeZoneIdentifier ?? report.day.timeZoneIdentifier).interval
         meetingRanges = report.meetings.map {
@@ -137,6 +137,12 @@ struct JournalStore {
     func recording(_ id: UUID) throws -> Recording {
         try JSONDecoder().decode(Recording.self, from: Data(contentsOf: folder(id).appendingPathComponent("recording.json")))
     }
+    func sourceAudio(_ id: UUID) -> SourceAudioAvailability {
+        guard let entry = try? recording(id) else { return .unavailable }
+        if entry.rawDeletedAt != nil { return .cleaned }
+        guard entry.isPlayable, let url = try? audio(id), files.fileExists(atPath: url.path) else { return .unavailable }
+        return .available(url)
+    }
     func list(offset: Int = 0, limit: Int = .max) throws -> [Recording] {
         try state.lock.withLock {
             try catalog().recordings.values.sorted { $0.start > $1.start }
@@ -182,7 +188,7 @@ struct JournalStore {
     func receive(_ source: URL, recording: Recording) throws {
         var recording = recording
         recording.localEvictedAt = nil
-        guard recording.isPlayable, recording.duration.isFinite, recording.duration > 0,
+        guard recording.isPlayable, recording.duration.isFinite, recording.duration > 0, recording.validTimeline,
               let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
             throw JournalError.invalidTransfer
         }
@@ -198,6 +204,8 @@ struct JournalStore {
                 recording.watchProcessingReceivedAt = previous.watchProcessingReceivedAt ?? recording.watchProcessingReceivedAt
                 recording.remoteAnalysisComplete = previous.remoteAnalysisComplete ?? recording.remoteAnalysisComplete
                 recording.awaitingWatchResult = previous.awaitingWatchResult ?? recording.awaitingWatchResult
+                recording.markers = recording.markers ?? previous.markers
+                recording.continuation = recording.continuation ?? previous.continuation
             }
             let destination = try folder(recording.id)
             let audioURL = try audio(recording.id)
@@ -314,6 +322,8 @@ struct JournalStore {
                 }
             }
             var entry = previous ?? result.recording
+            entry.markers = entry.markers ?? result.recording.markers
+            entry.continuation = entry.continuation ?? result.recording.continuation
             if previous == nil { entry.localEvictedAt = .now }
             entry.remoteAnalysisComplete = true
             let jobData = try JSONEncoder().encode(result.job)

@@ -38,7 +38,8 @@ def main():
             shutil.copyfile(containers[watch] / "Library/Application Support/WristJournalProcessingTests/watch-result.json",
                             documents / "watch-result.json")
         (root / "simulation-result.json").unlink(missing_ok=True)
-        run("launch", "--terminate-running-process", device, bundle, "-journal-processing-simulation")
+        preview = ["-journal-sources-preview"] if bundle == phone else []
+        run("launch", "--terminate-running-process", device, bundle, "-journal-processing-simulation", *preview)
         deadline = time.monotonic() + 45
         while not (root / "simulation-result.json").exists() and time.monotonic() < deadline:
             time.sleep(0.2)
@@ -46,6 +47,19 @@ def main():
         (output / (name + ".json")).write_text(json.dumps(result, ensure_ascii=False, indent=2))
         assert result.get("passed") is True, result
         print("PASS:", name, result, flush=True)
+        if bundle == phone:
+            render_path = root / "source-ui-result.json"
+            deadline = time.monotonic() + 10
+            render = {}
+            while time.monotonic() < deadline:
+                render = json.loads(render_path.read_text()) if render_path.exists() else {}
+                if render.get("audioCleaned") and render.get("quote"):
+                    break
+                time.sleep(0.1)
+            assert render.get("audioCleaned") and render.get("quote"), render
+            (output / "phone-source-render.json").write_text(json.dumps(render, ensure_ascii=False, indent=2))
+            time.sleep(0.8)
+            run("io", device, "screenshot", str(output / "phone-source-review.png"))
 
 
 if __name__ == "__main__":

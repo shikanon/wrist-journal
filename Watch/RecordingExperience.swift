@@ -58,3 +58,34 @@ enum RecordingPreflight {
         return warnings.isEmpty ? nil : warnings.joined(separator: "\n")
     }
 }
+
+/// In-memory intent only: relaunch never grants permission to reopen the microphone.
+struct RecordingRecovery {
+    struct Pending {
+        let token = UUID()
+        let recordingID: UUID
+        let interruptedAt: Date
+        let deadline: Date
+    }
+    private(set) var pending: Pending?
+    private(set) var attempts = 0
+    static let delays: [TimeInterval] = [0, 2, 5]
+
+    mutating func begin(recordingID: UUID, enabled: Bool, now: Date = .now) {
+        cancel()
+        if enabled { pending = Pending(recordingID: recordingID, interruptedAt: now, deadline: now.addingTimeInterval(120)) }
+    }
+
+    mutating func nextAttempt(shouldResume: Bool, now: Date = .now) -> TimeInterval? {
+        guard shouldResume, let pending, now < pending.deadline,
+              attempts < Self.delays.count else { cancel(); return nil }
+        defer { attempts += 1 }
+        return Self.delays[attempts]
+    }
+
+    mutating func expire(now: Date = .now) {
+        if let pending, now >= pending.deadline { cancel() }
+    }
+
+    mutating func cancel() { pending = nil; attempts = 0 }
+}

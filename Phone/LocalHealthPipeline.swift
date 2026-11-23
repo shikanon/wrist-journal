@@ -71,7 +71,8 @@ extension PhoneJournal {
                     title: meeting.title, location: meeting.location, minutes: meeting.minutes,
                     events: HeartRateCorrelation.events(speech: speech, samples: samples.heart, activity: samples.activity,
                         settings: previous?.thresholds ?? dailySettings.thresholds),
-                    healthNote: samples.note, speechWindows: speech)
+                    healthNote: samples.note, speechWindows: speech, citations: meeting.citations,
+                    markers: meeting.markers, continuation: meeting.continuation)
             }
             let report = DailyJournalReport(day: day, generatedAt: .now, meetings: meetings, health: health,
                 healthNote: health.metrics.isEmpty ? "没有可读健康数据；新增样本同步后会更新。" : nil,
@@ -79,7 +80,8 @@ extension PhoneJournal {
                 cloudBackupRequired: previous?.cloudBackupRequired ?? false,
                 backedUpRecordingIDs: previous?.backedUpRecordingIDs ?? [],
                 requiredBackupIDs: previous?.requiredBackupIDs,
-                healthTimeZoneIdentifier: healthZone, cleanupCompletedAt: previous?.cleanupCompletedAt)
+                healthTimeZoneIdentifier: healthZone, cleanupCompletedAt: previous?.cleanupCompletedAt,
+                retainsAudio: previous?.retainsAudio)
             try store.saveDaily(report)
             workState.dirtyHealthDays.remove(day)
             try workState.save(store)

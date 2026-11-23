@@ -1,0 +1,17 @@
+{
+  "removedHealthCorrected": true,
+  "m4aBytes": 27245,
+  "sourceOffsetSeconds": 21.5,
+  "passed": true,
+  "wavBytes": 116096,
+  "silentRequests": 0,
+  "legacyQueueDeferred": true,
+  "healthRefreshPreservesSources": true,
+  "encodedDuration": 3.5,
+  "scenario": "incremental-power",
+  "wholeM4AReused": true,
+  "silenceSkippedSeconds": 19,
+  "healthWithoutAPIKey": true,
+  "lateHealthUpdated": true,
+  "completedDayReused": true
+}

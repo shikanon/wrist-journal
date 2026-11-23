@@ -1,5 +1,16 @@
 # 模拟验证证据
 
+2026-11-23 连续录音与来源回顾更新：
+
+- [37 项新特性回归](continuity/continuity-regression.txt)，加上 [103 项核心回归](continuity/core-regression.txt)与 [24 项交互状态回归](continuity/recording-experience.txt)，累计 164 项。
+- [Watch 生命周期](continuity/watch-recording-lifecycle.json)：标记持久化与重复点击合并；默认不续录；开启后关联新文件；用户取消、开关关闭、系统拒绝及删除片段均取消恢复；重复结束通知和主动停止不重启。
+- [冷启动](continuity/watch-recording-cold-start.json)：恢复持久提示，清除过期的等待文案，不启动麦克风。
+- [Watch 分析](continuity/watch-processing.json)与 [Phone 归档](continuity/phone-processing.json)：转写原文与标记随结果保存，支持“保留原音”及关闭后清理，清理后引用继续可读。
+- [健康更新](continuity/phone-incremental-power.json)：迟到健康数据重新关联时保留原文、标记、空档，已完成日期不重写。
+- [Watch 渲染](continuity/watch-recording-render.json)及[控制面板截图](continuity/watch-recording-controls.png)：标记、停止、锁定按钮及 5 秒回锁；[Phone 来源渲染](continuity/phone-source-render.json)及[截图](continuity/phone-source-review.png)：原文摘录、时间范围与原音已清理状态。
+
+两端模拟器测试包与 Release 真机目标通过编译。Watch 生命周期使用合成编码音频，引用来自模型 fixture，结果由脚本交付；渲染为程序打开的原生 SwiftUI 页面。以上不代表真实录音、转写准确性、电话/Siri 中断、触摸或配对传输已通过真机测试。完整功能与边界见[连续录音、标记与来源回顾](../连续录音标记与来源回顾.md)。
+
 2026-11-23 录音体验更新：新增 [24 项状态回归](recording-experience.txt)、[保存／中断／损坏恢复](watch-recording-lifecycle.json)、[冷启动结果恢复](watch-recording-cold-start.json)、[原生 SwiftUI 渲染及回锁](watch-recording-render.json)。原有 103 项核心回归再次通过，两端测试包及 Release 编译通过。生命周期使用真实编码的合成音频，渲染使用 Debug 前台状态和程序解锁；**不代表麦克风录制或触摸手势实测**。完整边界与待补验项见 [Watch 录音体验与验收](../Watch录音体验与验收.md)。
 
 新增截图：[首页](watch-recording-home.png)、[锁定](watch-recording-locked.png)、[控制面板](watch-recording-controls.png)、[中断恢复](watch-recording-recovery.png)、[拒绝麦克风](watch-recording-permission-denied.png)。

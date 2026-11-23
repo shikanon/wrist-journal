@@ -148,6 +148,14 @@ private struct WatchHome: View {
                                 }
                                 .accessibilityIdentifier("recording.receipt")
                             }
+                            if journal.recovery.pending != nil {
+                                Text("当前未录音 · 等待自动续录")
+                                    .font(.footnote).foregroundStyle(.orange)
+                                Button("取消续录") {
+                                    journal.cancelRecovery(detail: "已取消续录，已录部分保留。")
+                                }
+                                .accessibilityIdentifier("recording.cancel-resume")
+                            }
                             Button { requestStart() } label: {
                                 Label(journal.starting ? "正在准备…" : "开始录音", systemImage: "mic.fill")
                                     .font(.headline)
@@ -181,6 +189,7 @@ private struct WatchHome: View {
                 }
             } message: { Text(preflightWarning ?? journal.message ?? "") }
         }
+        .id(journal.current?.id) // A resumed recording also returns from Library to the locked recorder.
     }
 
     private func requestStart() {
@@ -200,6 +209,10 @@ private struct WatchLibrary: View {
                 Toggle("开始后立即锁定", isOn: $immediateLock)
                 Text("关闭后显示 1 秒开始确认，再锁定。长按解锁后可停止；抬腕仍保持锁定。熄屏由系统控制。")
                     .font(.caption2)
+                Toggle("中断后自动续录", isOn: Binding(
+                    get: { journal.automaticResume }, set: journal.setAutomaticResume))
+                Text("默认关闭。开启后，系统允许时最多尝试 3 次，等待超过 2 分钟结束。续录单独保存并标明漏录时间；停止或重启 App 后不会自动录音。")
+                    .font(.caption2)
             }
             Section("数据处理") {
                 Text(journal.processingMode.title).font(.footnote)
@@ -208,12 +221,12 @@ private struct WatchLibrary: View {
                     Button("处理已结束日期") {
                         journal.requestProcessing(journal.recordings.filter { JournalDayKey(recording: $0).hasEnded() }.map(\.id))
                     }
-                    .disabled(journal.current != nil || journal.starting)
+                    .disabled(journal.current != nil || journal.starting || journal.recovery.pending != nil)
                     Text("将使用手机配置的接口上传录音并生成纪要。").font(.caption2)
                 }
                 ForEach(journal.watchMinutes.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
                     NavigationLink(String((journal.watchMinutes[id] ?? "查看纪要").prefix(28))) {
-                        ScrollView { Text(journal.watchMinutes[id] ?? "").padding() }
+                        WatchReview(journal: journal, id: id)
                     }
                 }
             }
@@ -253,6 +266,44 @@ private struct WatchLibrary: View {
     }
 }
 
+private struct WatchReview: View {
+    @ObservedObject var journal: WatchJournal
+    let id: UUID
+    @StateObject private var playback = LocalPlayback()
+    var body: some View {
+        let citations = (try? journal.store.analysis(id))?.citations ?? []
+        let audio = journal.store.sourceAudio(id)
+        List {
+            Section("纪要") { Text(journal.watchMinutes[id] ?? "") }
+            Section("原文来源") {
+                if citations.isEmpty {
+                    Text("这份纪要暂无原文引用。").font(.footnote)
+                }
+                ForEach(citations) { citation in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(citation.statement).font(.headline)
+                        Text("「\(citation.quote)」").font(.footnote)
+                        Text("AI 转写 · 约 \(citation.timeRange)").font(.caption2)
+                        Button("回听来源") {
+                            guard let url = journal.store.sourceAudio(id).url else {
+                                journal.message = journal.store.sourceAudio(id).detail
+                                return
+                            }
+                            do { try playback.play(url, startingAt: max(0, citation.startSeconds - 1)) }
+                            catch { journal.message = error.localizedDescription }
+                        }
+                        .disabled(audio.url == nil || journal.current != nil || journal.starting || journal.recovery.pending != nil)
+                    }
+                }
+                if !citations.isEmpty { Text(audio.detail).font(.caption2) }
+                if playback.playing { Button("停止回听") { playback.stop() } }
+            }
+        }
+        .navigationTitle("纪要与来源")
+        .onDisappear { playback.stop() }
+    }
+}
+
 private struct WatchRecording: View {
     @ObservedObject var journal: WatchJournal
     @StateObject private var playback = LocalPlayback()
@@ -276,6 +327,20 @@ private struct WatchRecording: View {
                     if entry.state == .damaged {
                         Text("文件无法播放。").font(.footnote)
                     }
+                    if let continuation = entry.continuation {
+                        Text(continuation.detail).font(.footnote)
+                    }
+                }
+                if !(entry.markers ?? []).isEmpty {
+                    Section("时间点标记") {
+                        ForEach(entry.markers ?? []) { marker in
+                            Button("\(marker.label) · \(durationText(marker.offset))") {
+                                do { try playback.play(journal.store.audio(id), startingAt: marker.offset) }
+                                catch { journal.message = error.localizedDescription }
+                            }
+                            .disabled(!entry.isPlayable || journal.current != nil || journal.starting || journal.recovery.pending != nil)
+                        }
+                    }
                 }
                 Section("备注") {
                     TextField("添加备注", text: $note)
@@ -295,7 +360,7 @@ private struct WatchRecording: View {
                         Label(playback.playing ? "停止播放" : "播放",
                               systemImage: playback.playing ? "stop.fill" : "play.fill")
                     }
-                    .disabled(journal.current != nil || journal.starting)
+                    .disabled(journal.current != nil || journal.starting || journal.recovery.pending != nil)
                     Button { journal.send(entry) } label: {
                         Label("发送到 iPhone", systemImage: "iphone.and.arrow.forward")
                     }

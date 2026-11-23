@@ -10,6 +10,12 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published private(set) var report: HealthReport?
     @Published private(set) var starting = false
     @Published private(set) var receipt: RecordingReceipt?
+    @Published private(set) var automaticResume = UserDefaults.standard.bool(forKey: "automaticRecordingResume")
+    @Published private(set) var recovery = RecordingRecovery()
+    @Published private(set) var markerStatus: String?
+    private var resumeTask: Task<Void, Never>?
+    private var recoveryDeadlineTask: Task<Void, Never>?
+    private var startGeneration = UUID()
     @Published private(set) var generatingReport = false
     @Published var message: String?
     @Published private(set) var collectLocation = UserDefaults.standard.bool(forKey: "collectMeetingLocation")
@@ -78,6 +84,9 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             do {
                 transfer.cancelTransfer(id)
                 try store.purgeRaw(id)
+                if recovery.pending?.recordingID == id {
+                    cancelRecovery(detail: "原音已清理，已取消续录。")
+                }
                 // Unknown IDs are already absent. Never ACK a failed unlink.
                 guard !FileManager.default.fileExists(atPath: try store.audio(id).path) else { continue }
                 acknowledged.append(id)
@@ -117,13 +126,25 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
            let data = try? Data(contentsOf: url) {
             receipt = try? JSONDecoder().decode(RecordingReceipt.self, from: data)
         }
+        if let receipt, receipt.outcome == .interrupted {
+            persistReceipt(RecordingReceipt(id: receipt.id, outcome: .interrupted,
+                detail: "上次录音已中断，已录部分保留。请手动开始；重启不会自动续录。"))
+        }
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance(), queue: .main
         ) { [weak self] notification in
-            guard notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-                    == AVAudioSession.InterruptionType.began.rawValue else { return }
-            Task { @MainActor [weak self] in self?.finish(interrupted: true) }
+            let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            Task { @MainActor [weak self] in
+                if type == AVAudioSession.InterruptionType.began.rawValue {
+                    self?.cancelRecovery()
+                    self?.finish(interrupted: true)
+                } else if type == AVAudioSession.InterruptionType.ended.rawValue {
+                    self?.resumeAfterInterruption(shouldResume:
+                        AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume))
+                }
+            }
         }
         reload()
         #if DEBUG
@@ -137,6 +158,9 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     #if DEBUG
     func runRecordingSimulation() async {
         var evidence: [String: Any] = [:]
+        let originalResume = automaticResume
+        setAutomaticResume(false)
+        defer { setAutomaticResume(originalResume) }
         do {
             await start()
             guard let entry = current, (fixtureRecording || recorder?.isRecording == true),
@@ -146,6 +170,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             if !fixtureRecording { try await Task.sleep(for: .seconds(1.4)) }
             checkRecording()
             guard current?.id == entry.id else { throw JournalError.recordingFailed }
+            markMoment()
+            markMoment()
             finish()
             let saved = try store.recording(entry.id)
             guard saved.isPlayable, saved.duration > 0, current == nil,
@@ -157,6 +183,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             evidence["duration"] = saved.duration
             evidence["fileFrames"] = try AVAudioFile(forReading: store.audio(entry.id)).length
             evidence["feedbackAfterValidatedSave"] = true
+            guard saved.markers?.count == 1, saved.validTimeline else { throw JournalError.invalidTransfer }
+            evidence["markerPersistedAndRepeatedTapCoalesced"] = true
             finish()
             guard recordingFeedback.count == 2 else { throw JournalError.invalidTransfer }
             evidence["duplicateStopIgnored"] = true
@@ -175,6 +203,51 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             guard persisted == receipt else { throw JournalError.invalidTransfer }
             evidence["interruptionObserverSavedPlayablePart"] = true
             evidence["persistentInterruptionReceipt"] = true
+            guard recovery.pending == nil else { throw JournalError.invalidTransfer }
+            evidence["disabledResumeNeverArmed"] = true
+
+            setAutomaticResume(true)
+            await start()
+            guard let beforeResume = current else { throw JournalError.recordingFailed }
+            if !fixtureRecording { try await Task.sleep(for: .seconds(1.4)) }
+            postInterruption(.began)
+            try await Task.sleep(for: .milliseconds(150))
+            guard current == nil, recovery.pending != nil else { throw JournalError.invalidTransfer }
+            postInterruption(.ended, shouldResume: true)
+            // A duplicate ended notification must not open a second recorder.
+            postInterruption(.ended, shouldResume: true)
+            try await Task.sleep(for: .milliseconds(250))
+            guard let resumed = current,
+                  resumed.continuation?.previousRecordingID == beforeResume.id,
+                  resumed.continuation?.sessionID == beforeResume.id,
+                  recovery.pending == nil else { throw JournalError.invalidTransfer }
+            if !fixtureRecording { try await Task.sleep(for: .seconds(1.4)) }
+            finish()
+            guard try store.recording(resumed.id).validTimeline else { throw JournalError.invalidTransfer }
+            postInterruption(.ended, shouldResume: true)
+            try await Task.sleep(for: .milliseconds(100))
+            guard current == nil else { throw JournalError.invalidTransfer }
+            evidence["optInResumesSeparateLinkedFile"] = true
+            evidence["duplicateEndedAndStopDoNotResume"] = true
+
+            for cancellation in ["user", "setting", "system", "deleted"] {
+                setAutomaticResume(true)
+                await start()
+                if !fixtureRecording { try await Task.sleep(for: .seconds(1.4)) }
+                guard current != nil else { throw JournalError.recordingFailed }
+                postInterruption(.began)
+                try await Task.sleep(for: .milliseconds(150))
+                guard recovery.pending != nil else { throw JournalError.invalidTransfer }
+                if cancellation == "user" { cancelRecovery() }
+                if cancellation == "setting" { setAutomaticResume(false) }
+                if cancellation == "deleted", let pending = recovery.pending {
+                    guard delete(try store.recording(pending.recordingID)) else { throw JournalError.invalidTransfer }
+                }
+                postInterruption(.ended, shouldResume: cancellation != "system")
+                try await Task.sleep(for: .milliseconds(150))
+                guard current == nil, recovery.pending == nil else { throw JournalError.invalidTransfer }
+                evidence["resumeCancelledBy_" + cancellation] = true
+            }
 
             // A playable orphan left marked recording must recover during reload.
             var orphan = saved
@@ -198,7 +271,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             evidence["explicitAcknowledgementClearsReceipt"] = true
             evidence["feedback"] = recordingFeedback
             // Leave a durable interruption card for the separate cold-launch verification.
-            publishReceipt(for: try store.recording(orphan.id), interrupted: true)
+            persistReceipt(RecordingReceipt(id: orphan.id, outcome: .interrupted,
+                detail: "已保留录音，等待系统允许续录。"))
             evidence["passed"] = true
         } catch {
             evidence["passed"] = false
@@ -211,10 +285,20 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }
 
     func verifyRecordingColdStart() {
-        let passed = receipt?.outcome == .interrupted && current == nil &&
+        let passed = receipt?.outcome == .interrupted && current == nil && recovery.pending == nil &&
+            receipt?.detail.contains("手动开始") == true &&
             recordings.contains { $0.id == receipt?.id && $0.isPlayable }
-        try? JSONSerialization.data(withJSONObject: ["passed": passed, "receiptRestoredAfterLaunch": passed])
+        try? JSONSerialization.data(withJSONObject: ["passed": passed, "receiptRestoredAfterLaunch": passed,
+                                                     "coldStartNeverResumesMicrophone": passed,
+                                                     "staleWaitingReceiptCleared": passed])
             .write(to: store.localStateURL("cold-start-result.json"), options: .atomic)
+    }
+
+    private func postInterruption(_ type: AVAudioSession.InterruptionType, shouldResume: Bool = false) {
+        NotificationCenter.default.post(name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            userInfo: [AVAudioSessionInterruptionTypeKey: type.rawValue,
+                       AVAudioSessionInterruptionOptionKey: shouldResume ? AVAudioSession.InterruptionOptions.shouldResume.rawValue : 0])
     }
 
     func runSimulation() async {
@@ -277,17 +361,30 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         }
     }
 
-    func start() async {
-        guard !starting, current == nil else { return }
+    @discardableResult
+    func start(continuing previous: Recording? = nil, recoveryToken: UUID? = nil) async -> Bool {
+        guard !starting, current == nil else { return false }
+        if let recoveryToken {
+            guard automaticResume, recovery.pending?.token == recoveryToken else { return false }
+        } else { cancelRecovery() }
+        let generation = UUID()
+        startGeneration = generation
         starting = true
         message = nil
+        markerStatus = nil
         pauseProcessing()
         defer { starting = false }
 
         let session = AVAudioSession.sharedInstance()
         var pending: Recording?
         do {
-            guard await AVAudioApplication.requestRecordPermission() else { throw JournalError.microphoneDenied }
+            if recoveryToken == nil {
+                guard await AVAudioApplication.requestRecordPermission() else { throw JournalError.microphoneDenied }
+            } else {
+                guard AVAudioApplication.shared.recordPermission == .granted else { throw JournalError.microphoneDenied }
+            }
+            guard !Task.isCancelled, startGeneration == generation,
+                  recoveryToken == nil || recovery.pending?.token == recoveryToken else { return false }
             transfer.pauseFileTransfers()
             cloudStorage.pause()
             let space = try store.availableStorage()
@@ -296,12 +393,13 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             if fixtureRecording {
                 var entry = Recording(id: UUID(), startedAt: .now, storage: .watch)
                 entry.timeZoneIdentifier = TimeZone.current.identifier
+                entry.continuation = continuation(from: previous, at: entry.startedAt)
                 pending = entry
                 try store.save(entry)
                 try AnalysisFixture.makeAudio(store.audio(entry.id))
                 current = entry
                 feedback(.start)
-                return
+                return true
             }
             #endif
             try session.setCategory(.record)
@@ -312,6 +410,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             var entry = Recording(id: UUID(), startedAt: .now)
             entry.timeZoneIdentifier = TimeZone.current.identifier
             entry.storage = transfer.storage.destination(free: space.free, capacity: space.capacity)
+            entry.continuation = continuation(from: previous, at: entry.startedAt)
             pending = entry
             try store.save(entry)
 
@@ -335,12 +434,112 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
                     await self.precise.start(at: entry.startedAt)
                 }
             }
+            return true
         } catch {
             if let pending { try? store.delete(pending.id) }
             try? session.setActive(false)
-            message = error.localizedDescription
-            feedback(.failure)
+            if recoveryToken == nil {
+                message = error.localizedDescription
+                feedback(.failure)
+            }
+            return false
         }
+    }
+
+    private func continuation(from previous: Recording?, at date: Date) -> RecordingContinuation? {
+        guard let previous else { return nil }
+        return RecordingContinuation(sessionID: previous.continuation?.sessionID ?? previous.id,
+            previousRecordingID: previous.id,
+            gapStartedAt: min(date, recovery.pending?.interruptedAt ?? previous.startedAt.addingTimeInterval(previous.duration)),
+            resumedAt: date)
+    }
+
+    func setAutomaticResume(_ enabled: Bool) {
+        automaticResume = enabled
+        UserDefaults.standard.set(enabled, forKey: "automaticRecordingResume")
+        if !enabled { cancelRecovery(detail: "已关闭自动续录，已录部分保留。") }
+    }
+
+    func cancelRecovery(detail: String? = nil) {
+        let wasPending = recovery.pending != nil
+        startGeneration = UUID()
+        resumeTask?.cancel()
+        resumeTask = nil
+        recoveryDeadlineTask?.cancel()
+        recoveryDeadlineTask = nil
+        recovery.cancel()
+        if wasPending, let detail, let receipt {
+            persistReceipt(RecordingReceipt(id: receipt.id, outcome: receipt.outcome, detail: detail))
+            Task { @MainActor [weak self] in
+                self?.reload()
+                self?.queueRecordings()
+                self?.queueProcessing()
+            }
+        }
+    }
+
+    private func armRecovery(for entry: Recording) {
+        cancelRecovery()
+        recovery.begin(recordingID: entry.id, enabled: automaticResume && entry.isPlayable)
+        guard let pending = recovery.pending else { return }
+        persistReceipt(RecordingReceipt(id: entry.id, outcome: .interrupted,
+            detail: "已保留录音，等待系统允许续录。"))
+        recoveryDeadlineTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(120))
+            guard !Task.isCancelled, let self, self.recovery.pending?.token == pending.token else { return }
+            self.cancelRecovery(detail: "等待续录已超时，已录部分保留。请手动开始。")
+        }
+    }
+
+    private func resumeAfterInterruption(shouldResume: Bool) {
+        guard let pending = recovery.pending else { return }
+        guard shouldResume, automaticResume else {
+            cancelRecovery(detail: "系统未允许自动续录，已录部分保留。请手动开始。")
+            return
+        }
+        guard resumeTask == nil else { return }
+        resumeTask = Task { [weak self] in
+            guard let self else { return }
+            while self.recovery.pending?.token == pending.token,
+                  let delay = self.recovery.nextAttempt(shouldResume: true) {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, self.recovery.pending?.token == pending.token else { return }
+                guard let previous = try? self.store.recording(pending.recordingID),
+                      previous.isPlayable else { break }
+                if await self.start(continuing: previous, recoveryToken: pending.token) {
+                    self.cancelRecovery()
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            // nextAttempt can clear its intent after exhausting retries.
+            self.cancelRecovery()
+            if let receipt = self.receipt {
+                self.persistReceipt(RecordingReceipt(id: receipt.id, outcome: receipt.outcome,
+                    detail: "未能自动续录，已录部分保留。请手动开始。"))
+            }
+            self.queueRecordings()
+            self.queueProcessing()
+        }
+    }
+
+    func markMoment() {
+        guard var entry = current else { return }
+        let offset: TimeInterval
+        #if DEBUG
+        if fixtureRecording { offset = min(3.5, max(0, Date.now.timeIntervalSince(entry.startedAt))) }
+        else { guard let recorder, recorder.isRecording else { return }; offset = recorder.currentTime }
+        #else
+        guard let recorder, recorder.isRecording else { return }
+        offset = recorder.currentTime
+        #endif
+        guard let marker = entry.addMarker(at: offset) else { return }
+        do {
+            try store.save(entry)
+            current = entry
+            markerStatus = "已标记 \(durationText(marker.offset))"
+            WKInterfaceDevice.current().play(.click)
+        } catch { message = "标记未保存：\(error.localizedDescription)" }
     }
 
     func recordingWarning() -> String? {
@@ -466,6 +665,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { cancelLocation() }
 
     func finish(interrupted: Bool = false) {
+        if !interrupted { cancelRecovery() }
+        startGeneration = UUID()
         guard let current else { return }
         preciseTask?.cancel()
         preciseTask = nil
@@ -482,6 +683,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             source.motionWindows = motion.isEmpty ? nil : motion
             let saved = try finalize(source, interrupted: interrupted)
             publishReceipt(for: saved, interrupted: interrupted)
+            if interrupted { armRecovery(for: saved) }
             feedback(!saved.isPlayable ? .failure : (interrupted ? .notification : .success))
             reload()
             if !deferredPurges.isEmpty {
@@ -506,7 +708,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         #endif
         let device = WKInterfaceDevice.current()
         device.isBatteryMonitoringEnabled = true
-        guard TransferPolicy.allowsAutomatic(recording: current != nil || starting,
+        guard TransferPolicy.allowsAutomatic(recording: current != nil || starting || recovery.pending != nil,
             chargingOnly: transfer.transferChargingOnly, charging: [.charging, .full].contains(device.batteryState)) else {
             if transfer.transferChargingOnly, current == nil, !recordings.isEmpty {
                 scheduleStorage(at: .now.addingTimeInterval(1800))
@@ -593,6 +795,9 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
            audio.processingFormat.sampleRate.isFinite, audio.processingFormat.sampleRate > 0 {
             entry.duration = Double(audio.length) / audio.processingFormat.sampleRate
             entry.state = interrupted ? .interrupted : .saved
+            entry.markers = entry.markers?.map {
+                RecordingMarker(id: $0.id, offset: min($0.offset, entry.duration), label: $0.label)
+            }
         } else {
             entry.state = .damaged
         }
@@ -635,6 +840,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         }
         do {
             try store.delete(entry.id)
+            if recovery.pending?.recordingID == entry.id { cancelRecovery() }
+            if receipt?.id == entry.id { dismissReceipt() }
             reload()
             return true
         } catch {
@@ -644,8 +851,8 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     }
 
     func send(_ entry: Recording) {
-        guard current == nil, !starting else {
-            message = "请先结束录音，再发送文件。"
+        guard current == nil, !starting, recovery.pending == nil else {
+            message = "请先结束录音或取消续录，再发送文件。"
             return
         }
         do {

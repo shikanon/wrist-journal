@@ -15,6 +15,7 @@ struct DailySettings: Codable {
     var batchMinutes: Int?
     var localAccessMinutes: Int?
     var processingMode: ProcessingMode?
+    var keepReviewAudio: Bool?
     var mode: ProcessingMode { processingMode ?? .phone }
 
     static func load() -> Self {
@@ -85,7 +86,9 @@ extension PhoneJournal {
                 do {
                     let cloudSource = entries.contains { $0.storage == .cloud }
                     let needsBackup = settings.cloudBackup || cloudSource || (previous?.cloudBackupRequired ?? false)
-                    if let previous, previous.cloudBackupRequired, !previous.canPurge, !settings.cloudBackup, !cloudSource {
+                    if let previous, previous.cloudBackupRequired,
+                       !Set(previous.requiredBackupIDs ?? previous.meetings.map(\.id)).isSubset(of: Set(previous.backedUpRecordingIDs)),
+                       !settings.cloudBackup, !cloudSource {
                         deferred.append("\(day.localDate) 等待重新开启云备份。")
                         continue
                     }
@@ -129,7 +132,8 @@ extension PhoneJournal {
                             events: HeartRateCorrelation.events(speech: job.speechWindows ?? [], samples: health.heart,
                                 activity: health.activity, settings: settings.thresholds),
                             healthNote: health.note ?? ((job.speechWindows ?? []).isEmpty ? "没有可用的激动说话时间线索，未做语音与心率关联。" : nil),
-                            speechWindows: job.speechWindows ?? []))
+                            speechWindows: job.speechWindows ?? [], citations: job.citations,
+                            markers: entry.markers, continuation: entry.continuation))
                     }
                     guard generation == processingGeneration else { throw CancellationError() }
                     guard (!meetings.isEmpty || settings.healthEnabled), let interval = day.interval else { continue }
@@ -146,7 +150,8 @@ extension PhoneJournal {
                             requiredBackupIDs: Array(Set(previous?.cloudBackupRequired == true ?
                                 (previous?.requiredBackupIDs ?? previous?.meetings.map(\.id) ?? []) : []).union(
                                 entries.filter { $0.rawDeletedAt == nil && (settings.cloudBackup || $0.storage == .cloud) }.map(\.id))),
-                            healthTimeZoneIdentifier: previous?.healthTimeZoneIdentifier ?? healthZone)
+                            healthTimeZoneIdentifier: previous?.healthTimeZoneIdentifier ?? healthZone,
+                            retainsAudio: settings.keepReviewAudio ?? false)
                         try store.saveDaily(report)
                     }
                     if report.cloudBackupRequired {
@@ -188,6 +193,11 @@ extension PhoneJournal {
                             try store.saveDaily(report)
                         }
                     }
+                    if report.retainsAudio != (settings.keepReviewAudio ?? false) {
+                        report.retainsAudio = settings.keepReviewAudio ?? false
+                        try store.saveDaily(report)
+                    }
+                    if report.retainsAudio == true { continue }
                     guard report.canPurge else {
                         deferred.append("\(day.localDate) 的备份尚未齐全，原音继续保留。")
                         continue
@@ -205,10 +215,11 @@ extension PhoneJournal {
                 dailyStatus = "分析或备份未完成，原音已保留。\n" + deferred.prefix(3).joined(separator: "\n")
                 return false
             }
-            dailyStatus = "已完成手机已收到的结束日期录音；后续同步会继续处理。日报、纪要和地点已保留。"
+            dailyStatus = "已完成手机已收到的结束日期录音；后续同步会继续处理。日报、纪要和来源已保留。"
+                + (settings.keepReviewAudio == true ? "原音继续保留，可回听引用。" : "")
             return true
         } catch is CancellationError {
-            dailyStatus = "分析已暂停，已保存进度，原音会在日报和备份成功后清理。"
+            dailyStatus = "分析已暂停，已保存进度。原音保留与清理遵循日报设置。"
             return false
         } catch {
             dailyStatus = "分析或备份未完成，原音已保留。\(error.localizedDescription)"

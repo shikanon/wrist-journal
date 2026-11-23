@@ -1,0 +1,11 @@
+{
+  "durableResultAcknowledged": true,
+  "sourceTimePreserved": true,
+  "passed": true,
+  "unauthorizedCheckpointResumed": true,
+  "markersInResult": true,
+  "requests": 3,
+  "watchAnalyzerExecuted": true,
+  "compressedBytes": 27619,
+  "transcriptCitationsGenerated": true
+}

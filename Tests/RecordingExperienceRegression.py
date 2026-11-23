@@ -43,9 +43,15 @@ def main():
     container = Path(run("get_app_container", args.watch, bundle, "data"))
     root = container / "Library/Application Support/WristJournalRecordingTests"
     fixture = ["-journal-recording-fixture"] if args.fixture else []
+    # Remove old evidence before launching: the app resets its sandbox asynchronously.
+    (root / "simulation-result.json").unlink(missing_ok=True)
     run("launch", "--terminate-running-process", args.watch, bundle,
         "-journal-recording-simulation", "-journal-recording-reset", *fixture)
     evidence(root / "simulation-result.json", "watch-recording-lifecycle")
+    lifecycle = json.loads((root / "simulation-result.json").read_text())
+    assert lifecycle.get("optInResumesSeparateLinkedFile") is True, lifecycle
+    assert lifecycle.get("markerPersistedAndRepeatedTapCoalesced") is True, lifecycle
+    (root / "cold-start-result.json").unlink(missing_ok=True)
     run("launch", "--terminate-running-process", args.watch, bundle,
         "-journal-recording-ui", "-journal-recording-verify", *fixture)
     evidence(root / "cold-start-result.json", "watch-recording-cold-start")

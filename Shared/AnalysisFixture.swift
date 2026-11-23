@@ -27,7 +27,7 @@ actor AnalysisFixture {
             audioBytes += bytes.count
         }
         let text = audio == nil ? "Watch 纪要：确认行动项，下周跟进。" :
-            #"{"minutes":"已讨论行动项","energeticSpeech":[{"startSeconds":1,"endSeconds":2,"evidence":"语速加快"}]}"#
+            #"{"minutes":"已讨论行动项","energeticSpeech":[{"startSeconds":1,"endSeconds":2,"evidence":"语速加快"}],"transcript":[{"startSeconds":1,"endSeconds":2,"text":"我们下周再跟进行动项。"}],"highlights":[{"statement":"下周跟进行动项","transcriptIndex":0}]}"#
         return (try JSONSerialization.data(withJSONObject: [
             "choices": [["finish_reason": "stop", "message": ["content": text]]]
         ]), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)

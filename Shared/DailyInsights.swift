@@ -55,8 +55,20 @@ struct SpeechChunk: Decodable {
     }
     let minutes: String
     let energeticSpeech: [Cue]
+    struct Transcript: Decodable {
+        let startSeconds: Double
+        let endSeconds: Double
+        let text: String
+    }
+    struct Highlight: Decodable {
+        let statement: String
+        let transcriptIndex: Int
+    }
+    var transcript: [Transcript]?
+    var highlights: [Highlight]?
 
-    static func parse(_ text: String, start: Date, duration: TimeInterval) throws -> (String, [SpeechWindow]) {
+    static func parse(_ text: String, start: Date, duration: TimeInterval,
+                      recordingID: UUID? = nil, sourceOffset: TimeInterval = 0) throws -> (String, [SpeechWindow], [SourceCitation]) {
         var clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if clean.hasPrefix("```") {
             guard let first = clean.firstIndex(of: "\n"), let last = clean.range(of: "```", options: .backwards),
@@ -64,7 +76,7 @@ struct SpeechChunk: Decodable {
             clean = String(clean[clean.index(after: first)..<last.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         // Older models returning prose can still produce minutes, but no timing evidence.
-        guard clean.hasPrefix("{") || clean.hasPrefix("[") else { return (text, []) }
+        guard clean.hasPrefix("{") || clean.hasPrefix("[") else { return (text, [], []) }
         let result = try JSONDecoder().decode(Self.self, from: Data(clean.utf8))
         guard !result.minutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw JournalError.invalidTransfer
@@ -77,7 +89,59 @@ struct SpeechChunk: Decodable {
                                 end: start.addingTimeInterval(cue.endSeconds),
                                 cue: String(cue.evidence.prefix(200)))
         }
-        return (result.minutes, windows)
+        let transcript = result.transcript ?? []
+        var seen: Set<String> = []
+        let citations = (result.highlights ?? []).prefix(64).compactMap { highlight -> SourceCitation? in
+            guard let recordingID, sourceOffset.isFinite, sourceOffset >= 0,
+                  transcript.indices.contains(highlight.transcriptIndex),
+                  !highlight.statement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  highlight.statement.count <= 1000 else { return nil }
+            let quote = transcript[highlight.transcriptIndex]
+            guard quote.startSeconds.isFinite, quote.endSeconds.isFinite,
+                  quote.startSeconds >= 0, quote.endSeconds > quote.startSeconds,
+                  quote.endSeconds <= duration,
+                  !quote.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  quote.text.count <= 4000,
+                  seen.insert("\(highlight.transcriptIndex)|\(highlight.statement)").inserted else { return nil }
+            return SourceCitation(id: UUID(), recordingID: recordingID,
+                startSeconds: sourceOffset + quote.startSeconds, endSeconds: sourceOffset + quote.endSeconds,
+                statement: highlight.statement, quote: quote.text)
+        }
+        return (result.minutes, windows, citations)
+    }
+}
+
+/// The quote is copied from a transcript entry, never from rewritten minutes.
+/// Word timing comes from the audio model; UI must label it approximate.
+struct SourceCitation: Codable, Identifiable, Sendable, Equatable {
+    let id: UUID
+    let recordingID: UUID
+    let startSeconds: TimeInterval
+    let endSeconds: TimeInterval
+    let statement: String
+    let quote: String
+
+    func isValid(for recording: Recording) -> Bool {
+        recordingID == recording.id && startSeconds.isFinite && endSeconds.isFinite &&
+        startSeconds >= 0 && endSeconds > startSeconds && endSeconds <= recording.duration + 1 &&
+        !statement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && statement.count <= 1000 &&
+        !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && quote.count <= 4000
+    }
+    var timeRange: String { "\(durationText(startSeconds))–\(durationText(endSeconds))" }
+    var shareText: String {
+        "\(statement)\n转写原文（AI 识别）：「\(quote)」\n录音 \(recordingID.uuidString) · 约 \(timeRange)"
+    }
+}
+
+enum SourceAudioAvailability: Equatable {
+    case available(URL), cleaned, unavailable
+    var url: URL? { if case .available(let url) = self { return url }; return nil }
+    var detail: String {
+        switch self {
+        case .available: "原音可回听，时间范围为 AI 估计。"
+        case .cleaned: "原音已清理，转写原文和时间引用保留，无法回听。"
+        case .unavailable: "本机没有可播放的原音。可检查手表同步或已有备份。"
+        }
     }
 }
 
@@ -161,6 +225,15 @@ struct MeetingDigest: Codable, Identifiable, Sendable {
     let events: [HeartRateEvent]
     let healthNote: String?
     var speechWindows: [SpeechWindow]?
+    var citations: [SourceCitation]?
+    var markers: [RecordingMarker]?
+    var continuation: RecordingContinuation?
+
+    var shareText: String {
+        ([minutes] + (citations ?? []).map(\.shareText) +
+         (markers ?? []).map { "\($0.label) · \(durationText($0.offset)) · 录音 \(id.uuidString)" } +
+         [continuation?.detail].compactMap { $0 }).joined(separator: "\n\n")
+    }
 }
 
 struct DailyJournalReport: Codable, Identifiable, Sendable {
@@ -175,9 +248,10 @@ struct DailyJournalReport: Codable, Identifiable, Sendable {
     var requiredBackupIDs: [UUID]?
     var healthTimeZoneIdentifier: String?
     var cleanupCompletedAt: Date?
+    var retainsAudio: Bool?
     var id: String { day.id }
     var canPurge: Bool {
-        !meetings.isEmpty && (!cloudBackupRequired || Set(requiredBackupIDs ?? meetings.map(\.id)).isSubset(of: Set(backedUpRecordingIDs)))
+        retainsAudio != true && !meetings.isEmpty && (!cloudBackupRequired || Set(requiredBackupIDs ?? meetings.map(\.id)).isSubset(of: Set(backedUpRecordingIDs)))
     }
 }
 

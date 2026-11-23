@@ -174,15 +174,18 @@ actor MeetingAnalyzer {
             let text = try await client.complete(
                 prompt: """
                 这是会议时间轴 \(start)–\(end) 的一段。仅返回 JSON：
-                {"minutes":"中文纪要，500字以内，包含议题、事实、分歧、决定、待办和不确定项","energeticSpeech":[{"startSeconds":0,"endSeconds":10,"evidence":"可听见的语速加快、音量升高或激烈措辞"}]}
+                {"minutes":"中文纪要，500字以内，包含议题、事实、分歧、决定、待办和不确定项","energeticSpeech":[{"startSeconds":0,"endSeconds":10,"evidence":"可听见的语速加快、音量升高或激烈措辞"}],"transcript":[{"startSeconds":0,"endSeconds":10,"text":"支持关键要点的逐字转写原文摘录"}],"highlights":[{"statement":"一个有原文支持的关键事实、决定或待办","transcriptIndex":0}]}
+                transcript 仅保留可听清的原话，不得用纪要改写替代；听不清或无内容返回空数组。highlights 的 transcriptIndex 是 transcript 中从 0 开始的索引，每条要点必须由对应原话支持；不得补造姓名、日期、负责人或结论。最多 8 条来源要点。
                 时间是相对此分段开始的秒数，范围为 0 到 \(Double(frameCount) / rate)。仅有清晰听觉证据时记录激动说话线索；普通发言、背景声、无声段落返回空数组。不推断说话者身份、心理状态或疾病。
                 """,
                 audio: data, format: uploadFormat
             )
             let parsed = try SpeechChunk.parse(text, start: recording.startedAt.addingTimeInterval(Double(startFrame) / rate),
-                                               duration: Double(frameCount) / rate)
+                                               duration: Double(frameCount) / rate,
+                                               recordingID: recording.id, sourceOffset: Double(startFrame) / rate)
             job.notes.append("[\(start)–\(end)]\n\(parsed.0)")
             job.speechWindows = (job.speechWindows ?? []) + parsed.1
+            job.citations = (job.citations ?? []) + parsed.2
             job.uploadedBytes = (job.uploadedBytes ?? 0) + data.count
             try await checkpoint(job)
         }

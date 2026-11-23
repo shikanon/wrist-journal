@@ -26,12 +26,17 @@ struct Export: FileDocument {
             return FileManager.default.fileExists(atPath: url.path)
         }.map(\.id))
         let rows = [["id", "started_at_utc", "duration_seconds", "state", "note", "audio_file",
-                     "time_zone", "latitude", "longitude", "local_audio_available"]]
+                     "time_zone", "latitude", "longitude", "local_audio_available", "markers",
+                     "session_id", "previous_recording_id", "gap_seconds"]]
             + recordings.map { entry in
                 [entry.id.uuidString, formatter.string(from: entry.startedAt), String(entry.duration),
                  entry.state.rawValue, spreadsheetSafe(entry.note), available.contains(entry.id) ? "WristJournal-\(entry.id.uuidString).m4a" : "",
                  spreadsheetSafe(entry.timeZoneIdentifier ?? ""), entry.location.map { String($0.latitude) } ?? "",
-                 entry.location.map { String($0.longitude) } ?? "", available.contains(entry.id) ? "true" : "false"]
+                 entry.location.map { String($0.longitude) } ?? "", available.contains(entry.id) ? "true" : "false",
+                 spreadsheetSafe((entry.markers ?? []).map { "\($0.label)@\(String(format: "%.3f", $0.offset))s" }.joined(separator: "; ")),
+                 (entry.continuation?.sessionID ?? entry.id).uuidString,
+                 entry.continuation?.previousRecordingID.uuidString ?? "",
+                 entry.continuation.map { String($0.gapDuration) } ?? ""]
             }
         return csv(rows)
     }

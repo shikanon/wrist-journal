@@ -26,6 +26,18 @@ struct RecordingScreen: View {
                         if journal.collectionMode == .precise, let status = journal.collectionStatus {
                             Text(status).font(.caption2).foregroundStyle(.secondary)
                         }
+                        Button {
+                            journal.markMoment()
+                            guardState.interact(voiceOver: voiceOver)
+                        } label: {
+                            Label("标记此刻", systemImage: "bookmark")
+                                .frame(maxWidth: .infinity, minHeight: 36)
+                        }
+                        .accessibilityIdentifier("recording.mark")
+                        if let status = journal.markerStatus {
+                            Text(status).font(.caption2).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("recording.marker-status")
+                        }
                         Button(role: .destructive) { journal.finish() } label: {
                             Label("停止并保存", systemImage: "stop.fill")
                                 .frame(maxWidth: .infinity, minHeight: 36)

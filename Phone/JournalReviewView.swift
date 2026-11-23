@@ -6,6 +6,16 @@ struct JournalReviewView: View {
     @State private var confirm = false
 
     var body: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-sources-preview") {
+            SourceReviewPreview(journal: journal)
+        } else { content }
+        #else
+        content
+        #endif
+    }
+
+    private var content: some View {
         List {
             Section {
                 Picker("回顾范围", selection: $period) {
@@ -35,7 +45,7 @@ struct JournalReviewView: View {
             } else if period == 0 {
                 ForEach(journal.days) { day in
                     NavigationLink {
-                        DailyReportView(report: day)
+                        DailyReportView(journal: journal, report: day)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(day.day.localDate)
@@ -59,7 +69,7 @@ struct JournalReviewView: View {
                         LabeledContent("伴随运动的重合", value: "\(review.activityEvents) 次")
                         ForEach(review.days) { day in
                             NavigationLink(day.day.localDate + " · " + day.day.timeZoneIdentifier) {
-                                DailyReportView(report: day)
+                                DailyReportView(journal: journal, report: day)
                             }
                         }
                     }
@@ -67,15 +77,51 @@ struct JournalReviewView: View {
             }
         }
         .navigationTitle("回顾")
-        .confirmationDialog("分析并清理结束日期的原音？", isPresented: $confirm) {
+        .confirmationDialog(journal.dailySettings.keepReviewAudio == true ? "分析结束日期的录音并保留原音？" : "分析并清理结束日期的原音？", isPresented: $confirm) {
             Button("开始每日分析") { Task { _ = await journal.processDays(automatic: false) } }
         } message: {
-            Text("录音会分段发送到火山方舟。日报成功后保留纪要、地点和关联结果并清理原音；已开启云备份时先完成备份。请先同步手表录音与健康数据。")
+            Text("录音会分段发送到火山方舟。日报保留纪要、转写摘录、时间标记和关联结果。"
+                 + (journal.dailySettings.keepReviewAudio == true ? "当前设置保留原音，可以回听。" : "当前设置在日报和所需备份成功后清理原音，之后引用只能查看原文。可在设置中开启「日报后保留原音」。"))
         }
     }
 }
 
+#if DEBUG
+/// Render-only probe using the same source component and real persisted fixture report.
+private struct SourceReviewPreview: View {
+    @ObservedObject var journal: PhoneJournal
+    @StateObject private var playback = LocalPlayback()
+    private var meeting: MeetingDigest? {
+        journal.days.flatMap(\.meetings).first { !($0.citations ?? []).isEmpty }
+    }
+    var body: some View {
+        List {
+            if let meeting {
+                Section("纪要") { Text(meeting.minutes) }
+                Section("来源与标记") {
+                    RecordingSourcesView(store: journal.store, recordingID: meeting.id,
+                        citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback)
+                }
+            } else { ProgressView("正在载入来源") }
+        }
+        .navigationTitle("来源回顾")
+        .task(id: meeting.map { journal.store.sourceAudio($0.id).detail }) {
+            guard let meeting else { return }
+            try? JSONSerialization.data(withJSONObject: [
+                "passed": true, "nativeSourceViewRendered": true,
+                "quote": meeting.citations?.first?.quote ?? "",
+                "audioCleaned": journal.store.sourceAudio(meeting.id) == .cleaned,
+                "playbackGestureTested": false
+            ]).write(to: journal.store.localStateURL("source-ui-result.json"), options: .atomic)
+        }
+        .onDisappear { playback.stop() }
+    }
+}
+#endif
+
 private struct DailyReportView: View {
+    @ObservedObject var journal: PhoneJournal
+    @StateObject private var playback = LocalPlayback()
     let report: DailyJournalReport
     var body: some View {
         List {
@@ -94,6 +140,9 @@ private struct DailyReportView: View {
                     Text(meeting.startedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened,
                                                                      timeZone: report.day.calendar.timeZone))
                          + " · " + durationText(meeting.duration))
+                    if let continuation = meeting.continuation {
+                        Text(continuation.detail).font(.footnote).foregroundStyle(.orange)
+                    }
                     if let location = meeting.location {
                         Text("会议地点（粗略）：\(location.description)")
                         if let accuracy = location.accuracy {
@@ -104,7 +153,9 @@ private struct DailyReportView: View {
                         }
                     } else { Text("未记录地点").font(.caption).foregroundStyle(.secondary) }
                     Text(meeting.minutes).textSelection(.enabled)
-                    ShareLink(item: meeting.minutes) { Label("分享纪要", systemImage: "square.and.arrow.up") }
+                    ShareLink(item: meeting.shareText) { Label("分享纪要与来源", systemImage: "square.and.arrow.up") }
+                    RecordingSourcesView(store: journal.store, recordingID: meeting.id,
+                        citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback)
                     ForEach(meeting.events) { event in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(event.activityPresent ? "心率与语音重合 · 伴随运动" : "心率与语音重合 · 未发现运动")
@@ -119,10 +170,77 @@ private struct DailyReportView: View {
             Section {
                 Text("录音可能包含其他发言者，语音线索不一定来自佩戴者本人。与心率变化的时间重合不证明因果，也不等于疾病诊断。HealthKit 采样和同步可能不完整。")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text(report.cleanupCompletedAt != nil ? "原音清理已完成。" :
+                Text(report.cleanupCompletedAt != nil ? "原音清理已完成。" : report.retainsAudio == true ? "已按设置保留原音；本机有音频时可回听来源。" :
                     (report.canPurge ? "日报已保存，等待完成原音清理。" : "等待备份完成，原音保留。"))
                     .font(.footnote)
             }
         }.navigationTitle(report.day.localDate)
+            .onDisappear { playback.stop() }
+    }
+}
+
+/// Used by both recording details and daily / weekly / monthly drill-down.
+struct RecordingSourcesView: View {
+    let store: JournalStore
+    let recordingID: UUID
+    let citations: [SourceCitation]
+    let markers: [RecordingMarker]
+    @ObservedObject var playback: LocalPlayback
+    @State private var error: String?
+
+    var body: some View {
+        let audio = store.sourceAudio(recordingID)
+        VStack(alignment: .leading, spacing: 12) {
+            if !markers.isEmpty {
+                Text("时间点标记").font(.headline)
+                ForEach(markers) { marker in
+                    Button {
+                        play(at: marker.offset)
+                    } label: {
+                        Label("\(marker.label) · \(durationText(marker.offset))", systemImage: "bookmark")
+                    }
+                    .foregroundStyle(audio.url == nil ? Color.secondary : Color.accentColor)
+                    .disabled(audio.url == nil)
+                }
+            }
+            Text("有来源的要点").font(.headline)
+            if citations.isEmpty {
+                Text("暂无可用的原文引用。分析完成后可查看返回的来源；旧纪要不会自动补造原文。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(citations) { citation in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(citation.statement).font(.subheadline.weight(.semibold)).textSelection(.enabled)
+                    Text("转写原文（AI 识别）").font(.caption).foregroundStyle(.secondary)
+                    Text("「\(citation.quote)」").textSelection(.enabled)
+                    Button { play(at: max(0, citation.startSeconds - 1)) } label: {
+                        Label("回听约 \(citation.timeRange)", systemImage: "play.circle")
+                    }
+                    .foregroundStyle(audio.url == nil ? Color.secondary : Color.accentColor)
+                    .disabled(audio.url == nil)
+                    ShareLink(item: citation.shareText) { Label("分享此来源", systemImage: "square.and.arrow.up") }
+                        .font(.footnote)
+                }
+                Divider()
+            }
+            if !citations.isEmpty || !markers.isEmpty {
+                Text(audio.detail).font(.footnote).foregroundStyle(.secondary)
+                if !citations.isEmpty {
+                    Text("转写可能有误；可从引用前 1 秒回听核对。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if playback.playing { Button("停止回听") { playback.stop() } }
+            }
+            if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func play(at offset: TimeInterval) {
+        // Recheck at the moment of action; a daily cleanup may have run since rendering.
+        let availability = store.sourceAudio(recordingID)
+        guard let url = availability.url else { error = availability.detail; return }
+        do { try playback.play(url, startingAt: offset); error = nil }
+        catch { self.error = error.localizedDescription }
     }
 }

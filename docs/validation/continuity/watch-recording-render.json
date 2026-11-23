@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "nativeSwiftUIRendered": true,
+  "idleRelockExecuted": true,
+  "touchGesturesTested": false,
+  "programmaticUnlock": true,
+  "microphoneCaptureTested": false,
+  "injectedActiveScene": true
+}
