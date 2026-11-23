@@ -12,6 +12,15 @@ struct WristJournalWatch: App {
             WatchHome(journal: delegate.journal)
                 .task {
                     #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-journal-recording-simulation") {
+                        await delegate.journal.runRecordingSimulation()
+                    }
+                    if ProcessInfo.processInfo.arguments.contains("-journal-recording-verify") {
+                        delegate.journal.verifyRecordingColdStart()
+                    }
+                    if ProcessInfo.processInfo.arguments.contains("-journal-recording-preview") {
+                        await delegate.journal.start()
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
                         await delegate.journal.runProcessingSimulation()
                     }
@@ -106,66 +115,92 @@ private final class WatchApplicationDelegate: NSObject, WKApplicationDelegate {
 private struct WatchHome: View {
     @ObservedObject var journal: WatchJournal
     @Environment(\.scenePhase) private var phase
-    @State private var crownTurn = 0.0
-    @FocusState private var crownFocused: Bool
+    @State private var preflightWarning: String?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 6) {
+            Group {
                 if let entry = journal.current {
-                    Label("录音中", systemImage: "record.circle.fill")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.red)
-                    Text(entry.startedAt, style: .timer)
-                        .font(.title2.monospacedDigit())
-                    if let status = journal.collectionStatus, journal.collectionMode == .precise {
-                        Text(status).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Button(role: .destructive) { journal.finish() } label: {
-                        Label("停止并保存", systemImage: "stop.fill")
-                    }
-                    .tint(.red)
+                    RecordingScreen(journal: journal, entry: entry).id(entry.id)
+                        #if DEBUG
+                        // A headless simulator has no active interactive scene. Render-only probe.
+                        .environment(\.scenePhase, ProcessInfo.processInfo.arguments.contains("-journal-recording-controls-preview") ? .active : phase)
+                        #endif
                 } else {
-                    Button { startRecording() } label: {
-                        Label(journal.starting ? "正在准备…" : "开始录音", systemImage: "mic.fill")
-                            .font(.headline)
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            if let receipt = journal.receipt {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 2) {
+                                        Label(receipt.title, systemImage: receipt.outcome == .saved ? "checkmark.circle" : "exclamationmark.triangle")
+                                            .font(.footnote.weight(.semibold))
+                                            .foregroundStyle(receipt.outcome == .saved ? .green : .orange)
+                                        Spacer(minLength: 0)
+                                        Button { journal.dismissReceipt() } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.caption2)
+                                                .frame(width: 44, height: 44)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("关闭录音结果提示")
+                                    }
+                                    Text(journal.receiptDetail).font(.caption2)
+                                }
+                                .accessibilityIdentifier("recording.receipt")
+                            }
+                            Button { requestStart() } label: {
+                                Label(journal.starting ? "正在准备…" : "开始录音", systemImage: "mic.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity, minHeight: 48)
+                            }
+                            .tint(.red)
+                            .disabled(journal.starting)
+                            .accessibilityIdentifier("recording.start")
+                            Text("开始后自动锁定屏幕")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            NavigationLink {
+                                WatchLibrary(journal: journal)
+                            } label: {
+                                Label("录音与健康", systemImage: "folder")
+                            }
+                        }
+                        .padding(.horizontal, 4)
                     }
-                    .tint(.red)
-                    .disabled(journal.starting)
-                    .focusable()
-                    .focused($crownFocused)
-                    .digitalCrownRotation($crownTurn, from: -1, through: 1, by: 1,
-                                          sensitivity: .medium, isContinuous: false, isHapticFeedbackEnabled: false)
-                    .onChange(of: crownTurn) {
-                        guard crownTurn != 0 else { return }
-                        crownTurn = 0
-                        if phase == .active { startRecording() }
-                    }
-                    .onAppear { crownFocused = true }
-                    Text("也可转动数码表冠")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    NavigationLink {
-                        WatchLibrary(journal: journal)
-                    } label: {
-                        Label("录音与健康", systemImage: "folder")
-                    }
+                    .navigationTitle("手记")
                 }
             }
-            .padding(.horizontal, 4)
-            .navigationTitle("手记")
-            .modifier(JournalNotice(message: $journal.message))
+            .alert(preflightWarning != nil ? "录音前提醒" : "手记", isPresented: Binding(
+                get: { preflightWarning != nil || journal.message != nil },
+                set: { if !$0 { preflightWarning = nil; journal.message = nil } })) {
+                if preflightWarning != nil {
+                    Button("继续录音") { preflightWarning = nil; startRecording() }
+                    Button("取消", role: .cancel) { preflightWarning = nil }
+                } else {
+                    Button("好", role: .cancel) { journal.message = nil }
+                }
+            } message: { Text(preflightWarning ?? journal.message ?? "") }
         }
     }
 
+    private func requestStart() {
+        if let warning = journal.recordingWarning() { preflightWarning = warning }
+        else { startRecording() }
+    }
     private func startRecording() { Task { await journal.start() } }
 }
 
 private struct WatchLibrary: View {
     @ObservedObject var journal: WatchJournal
+    @AppStorage("immediateRecordingLock") private var immediateLock = true
 
     var body: some View {
         List {
+            Section("录音体验") {
+                Toggle("开始后立即锁定", isOn: $immediateLock)
+                Text("关闭后显示 1 秒开始确认，再锁定。长按解锁后可停止；抬腕仍保持锁定。熄屏由系统控制。")
+                    .font(.caption2)
+            }
             Section("数据处理") {
                 Text(journal.processingMode.title).font(.footnote)
                 if let status = journal.processingStatus { Text(status).font(.caption2) }

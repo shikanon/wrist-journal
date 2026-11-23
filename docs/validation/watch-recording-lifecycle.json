@@ -1,0 +1,22 @@
+{
+  "duplicateStopIgnored": true,
+  "fileFrames": 64000,
+  "feedback": [
+    "start",
+    "success",
+    "start",
+    "interrupted",
+    "start",
+    "failure"
+  ],
+  "missingAudioNeverSignalsSuccess": true,
+  "duration": 4,
+  "passed": true,
+  "actualRecorderSaved": false,
+  "interruptionObserverSavedPlayablePart": true,
+  "feedbackAfterValidatedSave": true,
+  "explicitAcknowledgementClearsReceipt": true,
+  "orphanRecovered": true,
+  "syntheticEncodedAudio": true,
+  "persistentInterruptionReceipt": true
+}

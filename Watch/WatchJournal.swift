@@ -9,6 +9,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published private(set) var recordings: [Recording] = []
     @Published private(set) var report: HealthReport?
     @Published private(set) var starting = false
+    @Published private(set) var receipt: RecordingReceipt?
     @Published private(set) var generatingReport = false
     @Published var message: String?
     @Published private(set) var collectLocation = UserDefaults.standard.bool(forKey: "collectMeetingLocation")
@@ -25,6 +26,13 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     let store: JournalStore
     private let health = HealthReader()
     private var recorder: AVAudioRecorder?
+    private var preciseTask: Task<Void, Never>?
+    #if DEBUG
+    private var recordingFeedback: [String] = []
+    private var fixtureRecording: Bool {
+        ProcessInfo.processInfo.arguments.contains("-journal-recording-fixture")
+    }
+    #endif
     private var interruptionObserver: NSObjectProtocol?
     private lazy var locationManager: CLLocationManager = {
         let manager = CLLocationManager()
@@ -84,7 +92,14 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     override init() {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
+        if ProcessInfo.processInfo.arguments.contains("-journal-recording-simulation") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-recording-ui") {
+            let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalRecordingTests")
+            if ProcessInfo.processInfo.arguments.contains("-journal-recording-reset") {
+                try? FileManager.default.removeItem(at: root)
+            }
+            store = JournalStore(root: root)
+        } else if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") {
             let root = URL.applicationSupportDirectory.appendingPathComponent("WristJournalProcessingTests")
             try? FileManager.default.removeItem(at: root)
             store = JournalStore(root: root)
@@ -97,6 +112,11 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         store = JournalStore()
         #endif
         super.init()
+        WKInterfaceDevice.current().isBatteryMonitoringEnabled = true
+        if let url = try? store.localStateURL("recording-receipt.json"),
+           let data = try? Data(contentsOf: url) {
+            receipt = try? JSONDecoder().decode(RecordingReceipt.self, from: data)
+        }
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance(), queue: .main
@@ -107,12 +127,96 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         }
         reload()
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") { return }
+        if ProcessInfo.processInfo.arguments.contains("-journal-processing-simulation") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-recording-simulation") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-recording-ui") { return }
         #endif
         transfer.activate()
     }
 
     #if DEBUG
+    func runRecordingSimulation() async {
+        var evidence: [String: Any] = [:]
+        do {
+            await start()
+            guard let entry = current, (fixtureRecording || recorder?.isRecording == true),
+                  recordingFeedback == ["start"] else {
+                throw JournalError.recordingFailed
+            }
+            if !fixtureRecording { try await Task.sleep(for: .seconds(1.4)) }
+            checkRecording()
+            guard current?.id == entry.id else { throw JournalError.recordingFailed }
+            finish()
+            let saved = try store.recording(entry.id)
+            guard saved.isPlayable, saved.duration > 0, current == nil,
+                  recordingFeedback == ["start", "success"], receipt?.outcome == .saved else {
+                throw JournalError.recordingFailed
+            }
+            evidence["actualRecorderSaved"] = !fixtureRecording
+            evidence["syntheticEncodedAudio"] = fixtureRecording
+            evidence["duration"] = saved.duration
+            evidence["fileFrames"] = try AVAudioFile(forReading: store.audio(entry.id)).length
+            evidence["feedbackAfterValidatedSave"] = true
+            finish()
+            guard recordingFeedback.count == 2 else { throw JournalError.invalidTransfer }
+            evidence["duplicateStopIgnored"] = true
+
+            await start()
+            guard current != nil else { throw JournalError.recordingFailed }
+            if !fixtureRecording { try await Task.sleep(for: .seconds(1.4)) }
+            NotificationCenter.default.post(name: AVAudioSession.interruptionNotification,
+                object: AVAudioSession.sharedInstance(),
+                userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+            try await Task.sleep(for: .milliseconds(150))
+            guard current == nil, receipt?.outcome == .interrupted,
+                  recordingFeedback.last == "interrupted" else { throw JournalError.invalidTransfer }
+            let url = try store.localStateURL("recording-receipt.json")
+            let persisted = try JSONDecoder().decode(RecordingReceipt.self, from: Data(contentsOf: url))
+            guard persisted == receipt else { throw JournalError.invalidTransfer }
+            evidence["interruptionObserverSavedPlayablePart"] = true
+            evidence["persistentInterruptionReceipt"] = true
+
+            // A playable orphan left marked recording must recover during reload.
+            var orphan = saved
+            orphan.state = .recording
+            try store.save(orphan)
+            reload()
+            guard try store.recording(orphan.id).state == .interrupted,
+                  receipt?.id == orphan.id, receipt?.outcome == .interrupted else { throw JournalError.invalidTransfer }
+            evidence["orphanRecovered"] = true
+
+            await start()
+            guard let damaged = current else { throw JournalError.recordingFailed }
+            try await Task.sleep(for: .milliseconds(300))
+            try FileManager.default.removeItem(at: store.audio(damaged.id))
+            finish()
+            guard try store.recording(damaged.id).state == .damaged,
+                  receipt?.outcome == .failed, recordingFeedback.last == "failure" else { throw JournalError.invalidTransfer }
+            evidence["missingAudioNeverSignalsSuccess"] = true
+            dismissReceipt()
+            guard receipt == nil, !FileManager.default.fileExists(atPath: url.path) else { throw JournalError.invalidTransfer }
+            evidence["explicitAcknowledgementClearsReceipt"] = true
+            evidence["feedback"] = recordingFeedback
+            // Leave a durable interruption card for the separate cold-launch verification.
+            publishReceipt(for: try store.recording(orphan.id), interrupted: true)
+            evidence["passed"] = true
+        } catch {
+            evidence["passed"] = false
+            evidence["error"] = error.localizedDescription
+            evidence["message"] = message
+            evidence["feedback"] = recordingFeedback
+        }
+        try? JSONSerialization.data(withJSONObject: evidence, options: .prettyPrinted)
+            .write(to: store.localStateURL("simulation-result.json"), options: .atomic)
+    }
+
+    func verifyRecordingColdStart() {
+        let passed = receipt?.outcome == .interrupted && current == nil &&
+            recordings.contains { $0.id == receipt?.id && $0.isPlayable }
+        try? JSONSerialization.data(withJSONObject: ["passed": passed, "receiptRestoredAfterLaunch": passed])
+            .write(to: store.localStateURL("cold-start-result.json"), options: .atomic)
+    }
+
     func runSimulation() async {
         let result = URL.applicationSupportDirectory.appendingPathComponent("WristJournalWatchUITests/simulation-result.json")
         var evidence: [String: Any]
@@ -159,7 +263,9 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             let entries = try store.pendingRecordings()
             recordings = try entries.map { entry in
                 guard entry.state == .recording, current?.id != entry.id else { return entry }
-                return try finalize(entry, interrupted: true)
+                let recovered = try finalize(entry, interrupted: true)
+                publishReceipt(for: recovered, interrupted: true)
+                return recovered
             }.filter { $0.state != .recording && $0.rawDeletedAt == nil && !($0.storage == .phone && $0.localEvictedAt != nil) }
             report = try store.report()
             watchMinutes = [:]
@@ -174,6 +280,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     func start() async {
         guard !starting, current == nil else { return }
         starting = true
+        message = nil
         pauseProcessing()
         defer { starting = false }
 
@@ -184,8 +291,23 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             transfer.pauseFileTransfers()
             cloudStorage.pause()
             let space = try store.availableStorage()
-            if let free = space.free, free < 16 * 1024 * 1024 { throw JournalError.storageFull }
+            if let free = space.free, free < RecordingPreflight.minimumFree { throw JournalError.storageFull }
+            #if DEBUG
+            if fixtureRecording {
+                var entry = Recording(id: UUID(), startedAt: .now, storage: .watch)
+                entry.timeZoneIdentifier = TimeZone.current.identifier
+                pending = entry
+                try store.save(entry)
+                try AnalysisFixture.makeAudio(store.audio(entry.id))
+                current = entry
+                feedback(.start)
+                return
+            }
+            #endif
             try session.setCategory(.record)
+            // watchOS suppresses haptics during input by default. This is a preference, not a guarantee.
+            try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
+            try? session.setPrefersNoInterruptionsFromSystemAlerts(true)
             try session.setActive(true)
             var entry = Recording(id: UUID(), startedAt: .now)
             entry.timeZoneIdentifier = TimeZone.current.identifier
@@ -204,18 +326,78 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             guard recorder.record() else { throw JournalError.recordingFailed }
             self.recorder = recorder
             current = entry
+            feedback(.start)
             collectionMode = transfer.collectionMode
-            if collectionMode == .precise { await precise.start(at: entry.startedAt) }
-            WKInterfaceDevice.current().play(.start)
             requestLocation(for: entry.id)
+            if collectionMode == .precise {
+                preciseTask = Task { [weak self] in
+                    guard let self, self.current?.id == entry.id, !Task.isCancelled else { return }
+                    await self.precise.start(at: entry.startedAt)
+                }
+            }
         } catch {
             if let pending { try? store.delete(pending.id) }
             try? session.setActive(false)
             message = error.localizedDescription
+            feedback(.failure)
         }
     }
 
+    func recordingWarning() -> String? {
+        let device = WKInterfaceDevice.current()
+        device.isBatteryMonitoringEnabled = true
+        let free = try? store.availableStorage().free
+        return RecordingPreflight.warning(battery: device.batteryLevel,
+            charging: [.charging, .full].contains(device.batteryState), free: free)
+    }
+
+    var receiptDetail: String {
+        guard let receipt else { return "" }
+        guard receipt.outcome != .failed, let entry = try? store.recording(receipt.id) else { return receipt.detail }
+        let location: String
+        if entry.rawDeletedAt != nil { location = "原音已清理，报告保留" }
+        else if entry.phoneReceivedAt != nil { location = "iPhone 已确认接收" }
+        else if entry.cloudUploadedAt != nil { location = "云端已确认保存" }
+        else if entry.storage == .phone { location = "已存手表 · 等待 iPhone 确认" }
+        else if entry.storage == .cloud { location = "已存手表 · 等待云端确认" }
+        else { location = "已存手表" }
+        let prefix = receipt.outcome == .saved ? "" : "\(receipt.detail)\n"
+        return "\(prefix)\(location) · \(durationText(entry.duration))"
+    }
+
+    func dismissReceipt() {
+        do {
+            let url = try store.localStateURL("recording-receipt.json")
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            receipt = nil
+        } catch { message = error.localizedDescription }
+    }
+
+    private func publishReceipt(for entry: Recording, interrupted: Bool) {
+        let outcome: RecordingReceipt.Outcome = !entry.isPlayable ? .failed : (interrupted ? .interrupted : .saved)
+        let detail = !entry.isPlayable ? "文件未通过播放校验，请在录音列表检查。" :
+            (interrupted ? "已保留可播放部分，请重新开始续录。" : "录音已通过播放校验。")
+        persistReceipt(RecordingReceipt(id: entry.id, outcome: outcome, detail: detail))
+    }
+
+    private func persistReceipt(_ value: RecordingReceipt) {
+        receipt = value
+        do {
+            try JSONEncoder().encode(value).write(to: store.localStateURL("recording-receipt.json"), options: .atomic)
+        } catch { message = "录音结果提示未能持久保存：\(error.localizedDescription)" }
+    }
+
+    private func feedback(_ type: WKHapticType) {
+        #if DEBUG
+        recordingFeedback.append(type == .start ? "start" : type == .success ? "success" : type == .notification ? "interrupted" : "failure")
+        #endif
+        WKInterfaceDevice.current().play(type)
+    }
+
     func checkRecording() {
+        #if DEBUG
+        if fixtureRecording, current != nil { return }
+        #endif
         if current != nil, recorder?.isRecording != true {
             finish(interrupted: true)
         }
@@ -285,25 +467,23 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
 
     func finish(interrupted: Bool = false) {
         guard let current else { return }
+        preciseTask?.cancel()
+        preciseTask = nil
         let motion = precise.stop()
         cancelLocation()
         let recorder = self.recorder
         self.recorder = nil
         self.current = nil
         recorder?.stop()
-        WKInterfaceDevice.current().play(.stop)
         try? AVAudioSession.sharedInstance().setActive(false)
 
         do {
             var source = current
             source.motionWindows = motion.isEmpty ? nil : motion
             let saved = try finalize(source, interrupted: interrupted)
+            publishReceipt(for: saved, interrupted: interrupted)
+            feedback(!saved.isPlayable ? .failure : (interrupted ? .notification : .success))
             reload()
-            if !saved.isPlayable {
-                message = JournalError.recordingFailed.localizedDescription
-            } else if interrupted {
-                message = "音频会话被系统中断，已保存可播放的部分。"
-            }
             if !deferredPurges.isEmpty {
                 let ids = Array(deferredPurges)
                 deferredPurges.removeAll()
@@ -312,11 +492,18 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
             if saved.isPlayable { queueRecordings() }
             queueProcessing()
         } catch {
+            persistReceipt(RecordingReceipt(id: current.id, outcome: .failed,
+                detail: "保存未完成，原始文件保留待恢复。\(error.localizedDescription)"))
+            feedback(.failure)
             message = error.localizedDescription
         }
     }
 
     private func queueRecordings() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-recording-simulation") ||
+            ProcessInfo.processInfo.arguments.contains("-journal-recording-ui") { return }
+        #endif
         let device = WKInterfaceDevice.current()
         device.isBatteryMonitoringEnabled = true
         guard TransferPolicy.allowsAutomatic(recording: current != nil || starting,

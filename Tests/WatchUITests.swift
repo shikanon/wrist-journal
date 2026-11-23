@@ -2,26 +2,46 @@ import XCTest
 
 final class WatchUITests: XCTestCase {
     @MainActor
-    func testLibraryNavigationAndCrownRecordingRequest() {
+    func testLibraryNavigationAndCrownDoesNotRecord() {
         let app = XCUIApplication()
+        app.launchArguments = ["-journal-recording-ui", "-journal-recording-reset"]
         app.launch()
         let start = app.buttons["开始录音"]
         XCTAssertTrue(start.waitForExistence(timeout: 8))
 
         app.buttons["录音与健康"].tap()
+        for _ in 0..<4 where !app.staticTexts["健康报告"].exists { app.swipeUp() }
         XCTAssertTrue(app.staticTexts["健康报告"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
         XCTAssertTrue(start.waitForExistence(timeout: 8))
 
-        // The simulator's microphone permission is revoked for this test.
+        // Rotation remains available for scrolling and never requests the microphone.
         XCUIDevice.shared.rotateDigitalCrown(delta: 1)
-        let denied = app.staticTexts["请在系统设置中允许访问麦克风。"]
-        if !denied.waitForExistence(timeout: 8) {
-            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            screenshot.lifetime = .keepAlways
-            add(screenshot)
-            XCTFail("Turning the Digital Crown did not present the microphone permission error.\n\(app.debugDescription)")
-        }
+        XCTAssertFalse(app.staticTexts["请在系统设置中允许访问麦克风。"].exists)
+        XCTAssertFalse(app.otherElements["recording.locked"].exists)
+        XCTAssertTrue(start.isEnabled)
+    }
+
+    @MainActor
+    func testRecordingTouchGuardWithGrantedMicrophone() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-journal-recording-ui", "-journal-recording-reset"]
+        app.launch()
+        let start = app.buttons["recording.start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 8))
+        start.tap()
+        let hold = app.descendants(matching: .any)["recording.hold"].firstMatch
+        XCTAssertTrue(hold.waitForExistence(timeout: 8))
+        hold.tap()
+        XCTAssertFalse(app.buttons["recording.stop"].exists)
+        hold.press(forDuration: 0.5)
+        XCTAssertFalse(app.buttons["recording.stop"].exists)
+        hold.press(forDuration: 1.7)
+        XCTAssertTrue(app.buttons["recording.stop"].waitForExistence(timeout: 2))
+        XCTAssertTrue(hold.waitForExistence(timeout: 7))
+        hold.press(forDuration: 1.7)
+        app.buttons["recording.stop"].tap()
+        XCTAssertTrue(app.staticTexts["已保存"].waitForExistence(timeout: 5))
     }
 }

@@ -1,5 +1,9 @@
 # 模拟验证证据
 
+2026-11-23 录音体验更新：新增 [24 项状态回归](recording-experience.txt)、[保存／中断／损坏恢复](watch-recording-lifecycle.json)、[冷启动结果恢复](watch-recording-cold-start.json)、[原生 SwiftUI 渲染及回锁](watch-recording-render.json)。原有 103 项核心回归再次通过，两端测试包及 Release 编译通过。生命周期使用真实编码的合成音频，渲染使用 Debug 前台状态和程序解锁；**不代表麦克风录制或触摸手势实测**。完整边界与待补验项见 [Watch 录音体验与验收](../Watch录音体验与验收.md)。
+
+新增截图：[首页](watch-recording-home.png)、[锁定](watch-recording-locked.png)、[控制面板](watch-recording-controls.png)、[中断恢复](watch-recording-recovery.png)、[拒绝麦克风](watch-recording-permission-denied.png)。
+
 2026-11-22，Xcode 27.2。103 项纯 Swift 回归通过，八组应用内场景在独立 iOS 27.0／watchOS 27.2 模拟器中运行并通过。
 
 - [`phone-daily-cleanup.json`](phone-daily-cleanup.json)：日报、位置和心率事件保留，原音已清理；额外损坏录音仍保留。

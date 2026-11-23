@@ -4,7 +4,7 @@ Apple Watch 录音并记录每次会议的大致地点，可选在 Watch 或 iPh
 
 ## 使用
 
-1. 在手表首页转动数码表冠，或点「开始录音」。允许麦克风权限后，开始录音可放下手腕或切回表盘，结束时回到手记停止并保存。系统中断会尽量保存可播放部分。
+1. 在手表首页点「开始录音」。数码表冠保留系统导航和滚动用途，不再触发录音。录音真正启动后给出触觉反馈，默认立即进入黑底防误触界面；长按 1.5 秒解锁，再点「停止并保存」。控制面板 5 秒无操作自动锁定，放下手腕或离开应用也会锁定。VoiceOver 提供独立解锁按钮。系统中断尽量保存可播放部分，结果提示重启后仍可见。黑底界面不等于强制物理熄屏，熄屏由 watchOS 控制。详见[Watch 录音体验与验收](docs/Watch录音体验与验收.md)。
 2. 在手表「录音与健康」开启「记录会议地点」。每段录音记录当时时区，并在开始时获取一次粗略位置；15 秒无结果、停止录音或关闭设置都会取消定位。
 3. 在 iPhone 设置选择「优先手表」「优先手机」「优先云端」，默认优先手表。手表模式等待手机定期拉取结束日期；手机模式默认每 60 分钟批量发送，确认入库后释放手表副本；云端模式确认私人 iCloud 保存后释放手表原音，再由手机读取分析。设置对后续录音生效，实际后台时机由系统决定。手机「录音」页可主动同步、回听和导出。
 4. 在 iPhone 设置选择「数据处理」，默认手机处理，与存储位置独立。手机或 Watch 模式使用下方配置的方舟 Key；手动操作确认上传，也可开启「自动每日分析」。Watch 首次获取 Key 需两端可达，结果回传手机归档；失败时保留原音。「不处理」停止模型和日处理清理，可下载到 Mac。自动任务默认充电、非低电量且未过热时运行，并限制上传网络。详见[数据处理模式](docs/数据处理模式.md)。
@@ -48,6 +48,8 @@ xcodebuild -project WristJournal.xcodeproj -scheme WristJournal \
 swiftc Shared/Models.swift Shared/DailyInsights.swift Shared/WorkPolicy.swift Shared/StoragePolicy.swift Shared/ProcessingPolicy.swift Shared/JournalStore.swift \
   Tests/CoreRegression.swift -o /tmp/wrist-journal-core
 /tmp/wrist-journal-core
+swiftc Watch/RecordingExperience.swift Tests/RecordingExperienceRegression.swift -o /tmp/wrist-journal-recording
+/tmp/wrist-journal-recording
 ```
 
 在已经启动的独立 iOS／watchOS 模拟器上运行应用内回归：
@@ -82,6 +84,8 @@ python3 Tests/ProcessingRegression.py \
 
 回归覆盖日报清理、重启、失败冷却、手表权限、压缩静音、增量健康、存储与真实 HTTPS 下载。新增两组验证 Watch 实际编码／请求构造／401 后检查点恢复，以及其序列化结果在手机归档、零手机模型请求、不处理保留原音和元数据导出。使用独立 Debug 目录与合成输入；模型响应、云服务由 fixture 替代，跨模拟器结果由脚本交付，配对通信仍需真机验证。结果见 [验证记录](docs/validation)。
 
-Xcode 环境完整时，可另外运行 `PhoneUITests`／`WatchUITests` 的 XCTest 界面测试。手表用例要求先安装应用并拒绝麦克风。当前机器已运行上述应用内模拟回归；XCTest 界面测试包已编译，但其调度被 CoreSimulator 版本不匹配阻塞，不能视为界面用例已运行。
+Xcode 环境完整时，可另外运行 `PhoneUITests`／`WatchUITests` 的 XCTest 界面测试。新版 Watch UI 用例要求先安装应用并允许麦克风；权限拒绝由应用内回归单独覆盖。当前机器已运行上述应用内模拟回归；XCTest 界面测试包已编译，但其调度被 CoreSimulator 版本不匹配阻塞，不能视为界面用例已运行。
+
+2026-11-23 新增 24 项录音交互状态回归，以及编码音频保存／中断／损坏／冷启动恢复和原生界面渲染检查。触摸长按、实际麦克风录制、触觉及物理熄屏尚待完整模拟器或真机验收；[验收记录](docs/Watch录音体验与验收.md)区分合成输入与实际执行范围。[Auday 功能借鉴](docs/Auday功能借鉴.md)包含用户提供视频的时间点核对和建议优先级。
 
 真实定位、HealthKit 采样、熄屏录音、两端离线批量传输、CloudKit 账号及索引、Mac 浏览器的证书信任操作、Wi-Fi 后台行为和实际续航由配对真机验收。

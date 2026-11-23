@@ -63,7 +63,10 @@ final class PreciseCollection {
             query.updateHandler = handler
             self.query = query
             health.execute(query)
-        } catch { status("心率不可读 · 运动采集继续") }
+        } catch {
+            guard self.token == token else { return }
+            status("心率不可读 · 运动采集继续")
+        }
     }
 
     private func flush(at end: Date) {

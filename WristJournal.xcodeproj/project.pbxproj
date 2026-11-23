@@ -6,6 +6,10 @@
 	};
 	objectVersion = 56;
 	objects = {
+		E10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingExperience.swift; sourceTree = "<group>"; };
+		E10000000000000000000002 = { isa = PBXBuildFile; fileRef = E10000000000000000000001; };
+		E10000000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingScreen.swift; sourceTree = "<group>"; };
+		E10000000000000000000004 = { isa = PBXBuildFile; fileRef = E10000000000000000000003; };
 		D10000000000000000000008 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisFixture.swift; sourceTree = "<group>"; };
 		D10000000000000000000009 = { isa = PBXBuildFile; fileRef = D10000000000000000000008; };
 		D1000000000000000000000A = { isa = PBXBuildFile; fileRef = D10000000000000000000008; };
@@ -388,6 +392,8 @@
 			path = Watch;
 			sourceTree = "<group>";
 			children = (
+				E10000000000000000000001,
+				E10000000000000000000003,
 				D1000000000000000000000D,
 				D10000000000000000000006,
 				C10000000000000000000004,
@@ -443,6 +449,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10000000000000000000002,
+				E10000000000000000000004,
 				D1000000000000000000000A,
 				D1000000000000000000000E,
 				D10000000000000000000003,
