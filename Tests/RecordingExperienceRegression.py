@@ -49,6 +49,7 @@ def main():
     run("launch", "--terminate-running-process", args.watch, bundle,
         "-journal-recording-ui", "-journal-recording-verify", *fixture)
     evidence(root / "cold-start-result.json", "watch-recording-cold-start")
+    time.sleep(1)  # Cold-start evidence is written before SwiftUI finishes its first visible frame.
     run("io", args.watch, "screenshot", str(output / "watch-recording-recovery.png"))
     run("privacy", args.watch, "revoke", "microphone", bundle)
     permission_result = container / "Library/Application Support/WristJournalWatchUITests/simulation-result.json"
