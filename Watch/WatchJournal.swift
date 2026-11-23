@@ -626,7 +626,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
         if locationManager.authorizationStatus == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
         } else if locationManager.authorizationStatus == .denied || locationManager.authorizationStatus == .restricted {
-            message = "请在手表的定位设置中允许手记使用位置。"
+            message = "请在手表的定位设置中允许恩名手记使用位置。"
         }
     }
 

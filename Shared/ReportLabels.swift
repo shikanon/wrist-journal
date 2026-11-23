@@ -20,7 +20,7 @@ struct JournalNotice: ViewModifier {
     @Binding var message: String?
 
     func body(content: Content) -> some View {
-        content.alert("手记", isPresented: Binding(
+        content.alert("恩名手记", isPresented: Binding(
             get: { message != nil },
             set: { if !$0 { message = nil } }
         )) {

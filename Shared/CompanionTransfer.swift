@@ -393,7 +393,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         if let error {
             onEvent(.message("发送失败，可以重试。\(error.localizedDescription)"))
         } else {
-            onEvent(.message("传输完成。请在 iPhone 手记中查看。"))
+            onEvent(.message("传输完成。请在 iPhone 的恩名手记中查看。"))
         }
     }
 }

@@ -265,12 +265,12 @@ final class LocalDownloadServer: ObservableObject {
 
     private static let page = """
     <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>手记 · 临时下载</title><style>
+    <title>恩名手记 · 临时下载</title><style>
     body{font:17px system-ui;color:#173932;background:#f2f7f5;margin:40px auto;padding:24px;max-width:760px}
     h1{font-size:32px}p{line-height:1.7}button{font:inherit;border:0;border-radius:8px;padding:10px 18px;background:#176552;color:white;cursor:pointer}
     li{display:flex;gap:16px;align-items:center;justify-content:space-between;background:white;padding:18px;margin:12px 0;border-radius:12px}
     ul{padding:0}small{display:block;color:#58746b}#status{color:#58746b}
-    </style><h1>手记 · 临时下载</h1><p>录音由 iPhone 临时提供。下载不会删除原音。保持手机 App 在前台；空闲到期后连接会关闭。</p>
+    </style><h1>恩名手记 · 临时下载</h1><p>录音由 iPhone 临时提供。下载不会删除原音。保持手机 App 在前台；空闲到期后连接会关闭。</p>
     <button id="refresh">读取录音列表</button> <button id="metadata">下载元数据与已有报告</button>
     <p>元数据含录音时间、时区、地点、已有运动窗口与健康报告，缺少的音频会标明。原音请逐段下载。</p>
     <p id="status">请使用手机显示的完整网址连接。</p><ul id="list"></ul>

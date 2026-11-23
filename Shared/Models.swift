@@ -206,8 +206,8 @@ enum JournalError: LocalizedError {
         case .recordingFailed: "录音未能保存为可播放文件。"
         case .playbackFailed: "无法开始播放这段录音。"
         case .healthUnavailable: "此设备无法读取健康数据。"
-        case .phoneUnavailable: "请确认配对 iPhone 已安装并打开手记，然后重试。"
-        case .watchUnavailable: "正在等待手表连接。请确认手表已安装手记，并保持两台设备在附近。"
+        case .phoneUnavailable: "请确认配对 iPhone 已安装并打开恩名手记，然后重试。"
+        case .watchUnavailable: "正在等待手表连接。请确认手表已安装恩名手记，并保持两台设备在附近。"
         case .invalidTransfer: "收到的文件不完整或无法识别。"
         case .storageFull: "手表可用空间不足以安全录音。请先同步已有录音，或清理手表空间。"
         }

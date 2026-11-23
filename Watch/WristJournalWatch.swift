@@ -175,10 +175,10 @@ private struct WatchHome: View {
                         }
                         .padding(.horizontal, 4)
                     }
-                    .navigationTitle("手记")
+                    .navigationTitle("恩名手记")
                 }
             }
-            .alert(preflightWarning != nil ? "录音前提醒" : "手记", isPresented: Binding(
+            .alert(preflightWarning != nil ? "录音前提醒" : "恩名手记", isPresented: Binding(
                 get: { preflightWarning != nil || journal.message != nil },
                 set: { if !$0 { preflightWarning = nil; journal.message = nil } })) {
                 if preflightWarning != nil {

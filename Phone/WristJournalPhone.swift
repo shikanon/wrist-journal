@@ -391,6 +391,16 @@ private struct JournalSettings: View {
                 Text("按激动说话前 5 分钟至少 3 个非运动样本建立基线。运动期间的重合单独标记。此功能用于回顾，不能诊断疾病或保证捕捉每次心率变化。")
             }
             .disabled(journal.processingDays)
+            Section {
+                Image("BrandLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 210)
+                    .clipShape(.rect(cornerRadius: 12))
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("恩名手记")
+                    .listRowBackground(Color.clear)
+            }
         }
         .navigationTitle("设置")
     }

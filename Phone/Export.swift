@@ -108,7 +108,7 @@ struct Export: FileDocument {
         <html lang="zh-CN">
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>手记 · 健康报告</title>
+        <title>恩名手记 · 健康报告</title>
         <style>
         body { color: #17232c; background: #f3f7f8; font: 16px system-ui, sans-serif; margin: 2rem auto;
                max-width: 56rem; padding: 0 1rem; line-height: 1.6; }

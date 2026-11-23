@@ -1,4 +1,6 @@
-# 手记 · WristJournal
+# 恩名手记 · WristJournal
+
+恩赐于此名的手机 App，用于记录你的上下文（context）。
 
 Apple Watch 录音并记录每次会议的大致地点，可选在 Watch 或 iPhone 调用火山方舟，也可不处理、导出到 Mac 自行处理。iPhone 汇总健康日报与周／月回顾，原音可选择备份到私人 iCloud。
 

@@ -494,7 +494,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				INFOPLIST_KEY_CFBundleDisplayName = "恩名手记";
 				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Watch/WristJournal.entitlements;
@@ -516,7 +516,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				INFOPLIST_KEY_CFBundleDisplayName = "恩名手记";
 				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Watch/WristJournal.entitlements;
@@ -684,7 +684,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				INFOPLIST_KEY_CFBundleDisplayName = "恩名手记";
 				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Phone/WristJournal.entitlements;
@@ -707,7 +707,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "手记";
+				INFOPLIST_KEY_CFBundleDisplayName = "恩名手记";
 				MARKETING_VERSION = 0.2.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				CODE_SIGN_ENTITLEMENTS = Phone/WristJournal.entitlements;
