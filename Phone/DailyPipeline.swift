@@ -45,15 +45,101 @@ struct DailyWorkState: Codable {
     }
 }
 
+struct DailyAnalysisPreview: Identifiable {
+    struct Day: Identifiable {
+        let key: JournalDayKey
+        let recordingIDs: Set<UUID>
+        let archivedIDs: Set<UUID>
+        let needsBackup: Bool
+        var id: String { key.id }
+    }
+    let id = UUID()
+    let days: [Day]
+    let mode: ProcessingMode
+    let retainsAudio: Bool
+    let generation: UUID
+    var recordingCount: Int { days.reduce(0) { $0 + $1.recordingIDs.count } }
+}
+
+enum DailyAnalysisIssue: String, CaseIterable, Identifiable {
+    case watch, backupOff, backup, network, settings, cooldown, audio, scopeChanged, archive
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .watch: "等待 Watch 处理"
+        case .backupOff: "需要重新开启云备份"
+        case .backup: "云备份未完成"
+        case .network: "等待网络"
+        case .settings: "分析配置有误"
+        case .cooldown: "稍后才能重试"
+        case .audio: "录音不完整"
+        case .scopeChanged: "归档范围已变化"
+        case .archive: "分析或归档未完成"
+        }
+    }
+    var nextStep: String {
+        switch self {
+        case .watch: "保持设备靠近，打开两端 App，等手表完成处理后再试。"
+        case .backupOff: "到设置开启「云端备份原始录音」，然后重试。"
+        case .backup: "确认已登录 iCloud、空间充足，并在网络稳定时重试。"
+        case .network: "连接稳定的 Wi-Fi 后重试。"
+        case .settings: "到设置的「进阶设置」检查方舟 API Key 和模型 ID。"
+        case .cooldown: "稍后再试；如果已开启自动分析，App 会继续尝试。"
+        case .audio: "先重新同步录音，或在录音详情检查是否还有可用的原音。"
+        case .scopeChanged: "重新打开分析确认页，查看最新范围。"
+        case .archive: "查看下方信息，然后重试。"
+        }
+    }
+}
+
 @MainActor
 extension PhoneJournal {
+    func analysisPreview() throws -> DailyAnalysisPreview {
+        let settings = dailySettings
+        let retainsAudio = settings.keepReviewAudio == true
+        let now = Date.now
+        let days = try store.pendingDays().filter { eligibleForAnalysis($0, settings: settings, at: now) }.compactMap { day -> DailyAnalysisPreview.Day? in
+            let entries = try store.pendingRecordings(day: day)
+            let previous = try store.daily(day)
+            let recordingIDs = Set(entries.map(\.id))
+            let archivedIDs = Set(previous?.meetings.map(\.id) ?? [])
+            let backupMissing = previous.map {
+                $0.cloudBackupRequired && !Set($0.requiredBackupIDs ?? $0.meetings.map(\.id)).isSubset(of: Set($0.backedUpRecordingIDs))
+            } ?? false
+            let retentionWork = !archivedIDs.isEmpty && previous?.cleanupCompletedAt == nil &&
+                (!retainsAudio || previous?.retainsAudio != true)
+            guard !recordingIDs.isSubset(of: archivedIDs) || backupMissing || retentionWork else { return nil }
+            return DailyAnalysisPreview.Day(key: day, recordingIDs: recordingIDs,
+                archivedIDs: archivedIDs,
+                needsBackup: settings.cloudBackup || entries.contains { $0.storage == .cloud } || previous?.cloudBackupRequired == true)
+        }
+        return DailyAnalysisPreview(days: days, mode: settings.mode, retainsAudio: retainsAudio,
+                                    generation: processingGeneration)
+    }
+
+    private func eligibleForAnalysis(_ day: JournalDayKey, settings: DailySettings, at date: Date) -> Bool {
+        guard day.hasEnded(at: date) else { return false }
+        let healthZone = settings.healthTimeZoneIdentifier ?? TimeZone.current.identifier
+        return !settings.healthEnabled ||
+            JournalDayKey(localDate: day.localDate, timeZoneIdentifier: healthZone).hasEnded(at: date)
+    }
+
     /// One serial executor for both manual meeting work and daily work.
-    func processDays(automatic: Bool, externalPowerGranted: Bool = false) async -> Bool {
+    func processDays(automatic: Bool, externalPowerGranted: Bool = false, preview: DailyAnalysisPreview? = nil) async -> Bool {
         guard processingMode != .none else {
             dailyStatus = "不处理模式：原音已保留，可导出到 Mac。"
             return false
         }
-        guard !processingDays, !hasAnalysisWorker else { return false }
+        guard !processingDays, !hasAnalysisWorker, !readingHealth else {
+            if preview != nil {
+                message = "正在执行另一项更新，完成后请重新确认分析范围。"
+            }
+            return false
+        }
+        if let preview, preview.generation != processingGeneration {
+            dailyStatus = "设置已更改，请重新查看分析范围。"
+            return false
+        }
         let settings = dailySettings
         let generation = processingGeneration
         if automatic {
@@ -62,34 +148,45 @@ extension PhoneJournal {
             else { return false }
         }
         processingDays = true
+        dailyIssues = [:]
         defer { processingDays = false; reload(); resumeAnalysis() }
         do {
             // Local work comes first and does not depend on upload policy, credentials or cloud availability.
-            let healthSamples = try await refreshLocalHealth()
+            let healthSamples = try await readLocalHealth()
             guard generation == processingGeneration else { throw CancellationError() }
             if automatic && !settings.automatic {
                 dailyStatus = "健康本地统计已更新。"
                 return true
             }
             let healthZone = settings.healthTimeZoneIdentifier ?? TimeZone.current.identifier
-            var deferred: [String] = []
-            for day in try store.pendingDays() where day.hasEnded() {
+            let scope = preview.map { Dictionary(uniqueKeysWithValues: $0.days.map { ($0.key, $0) }) }
+            let targetDays = try preview?.days.map(\.key) ?? store.pendingDays()
+            for day in targetDays where eligibleForAnalysis(day, settings: settings, at: .now) {
                 try Task.checkCancellation()
                 if automatic && !AnalysisScheduling.canRun(settings: settings, externalPowerGranted: externalPowerGranted) {
                     dailyStatus = "自动分析已暂停，等待充电、退出低电量模式或设备降温。"
                     return false
                 }
-                let entries = try store.pendingRecordings(day: day)
+                let approved = scope?[day]
+                let entries = try store.pendingRecordings(day: day).filter { approved?.recordingIDs.contains($0.id) ?? true }
                 let healthKey = JournalDayKey(localDate: day.localDate, timeZoneIdentifier: healthZone)
-                if settings.healthEnabled, !healthKey.hasEnded() { continue }
                 let previous = try store.daily(day)
+                var backingUp = false
+                func deferDay(_ reason: DailyAnalysisIssue, detail: String? = nil) {
+                    dailyIssues[reason, default: []].append(day.localDate + (detail.map { " · \($0)" } ?? ""))
+                }
+                if let approved, let previous,
+                   !Set(previous.meetings.map(\.id)).isSubset(of: approved.recordingIDs.union(approved.archivedIDs)) {
+                    deferDay(.scopeChanged)
+                    continue
+                }
                 do {
                     let cloudSource = entries.contains { $0.storage == .cloud }
                     let needsBackup = settings.cloudBackup || cloudSource || (previous?.cloudBackupRequired ?? false)
                     if let previous, previous.cloudBackupRequired,
                        !Set(previous.requiredBackupIDs ?? previous.meetings.map(\.id)).isSubset(of: Set(previous.backedUpRecordingIDs)),
                        !settings.cloudBackup, !cloudSource {
-                        deferred.append("\(day.localDate) 等待重新开启云备份。")
+                        deferDay(.backupOff)
                         continue
                     }
                     let previousIDs = Set(previous?.meetings.map(\.id) ?? [])
@@ -99,17 +196,19 @@ extension PhoneJournal {
                         if entry.isPlayable { return true }
                         return try store.analysis(entry.id)?.state == .complete
                     }) else {
-                        deferred.append("\(day.localDate) 有不完整录音，原音已保留。")
+                        deferDay(.audio)
                         continue
                     }
-                    dailyStatus = "正在整理 \(day.localDate) · \(day.timeZoneIdentifier)"
+                    dailyStatus = "正在整理 \(day.localDate)"
                     var meetings = previous?.meetings ?? []
                     var analyzed: [(Recording, MeetingAnalysisJob)] = []
                     if processingMode == .watch {
                         let waiting = try pending.filter { try store.analysis($0.id)?.state != .complete }
                         if !waiting.isEmpty {
-                            try requestWatchProcessing(waiting, manual: !automatic)
-                            deferred.append("\(day.localDate)：等待 Watch 完成 \(waiting.count) 段录音")
+                            do { try requestWatchProcessing(waiting, manual: !automatic) }
+                            catch is CancellationError { throw CancellationError() }
+                            catch { deferDay(.watch, detail: error.localizedDescription); continue }
+                            deferDay(.watch, detail: "\(waiting.count) 段")
                             continue
                         }
                     }
@@ -154,7 +253,11 @@ extension PhoneJournal {
                             retainsAudio: settings.keepReviewAudio ?? false)
                         try store.saveDaily(report)
                     }
+                    // Health-only days (or entries removed after confirmation) have nothing to clean.
+                    guard !report.meetings.isEmpty else { continue }
                     if report.cloudBackupRequired {
+                        backingUp = true
+                        var missingHistoricalAudio = false
                         let requiredIDs = Set(report.requiredBackupIDs ?? report.meetings.map(\.id))
                         for entry in entries where requiredIDs.contains(entry.id)
                             && !report.backedUpRecordingIDs.contains(entry.id) {
@@ -171,8 +274,9 @@ extension PhoneJournal {
                             }
                             guard entry.rawDeletedAt == nil else {
                                 // Old reports may contain already-purged recordings. Never claim they were backed up.
-                                dailyStatus = "部分历史原音已清理，无法补备份；已保留本次原音。"
-                                return false
+                                deferDay(.backup, detail: "历史原音已清理，无法补备份。")
+                                missingHistoricalAudio = true
+                                break
                             }
                             do {
                                 try await cloudBackup.save(recording: entry, audio: store.audio(entry.id),
@@ -192,6 +296,12 @@ extension PhoneJournal {
                             report.backedUpRecordingIDs.append(entry.id)
                             try store.saveDaily(report)
                         }
+                        backingUp = false
+                        if missingHistoricalAudio { continue }
+                        if !Set(report.requiredBackupIDs ?? report.meetings.map(\.id)).isSubset(of: Set(report.backedUpRecordingIDs)) {
+                            deferDay(.backup)
+                            continue
+                        }
                     }
                     if report.retainsAudio != (settings.keepReviewAudio ?? false) {
                         report.retainsAudio = settings.keepReviewAudio ?? false
@@ -199,7 +309,7 @@ extension PhoneJournal {
                     }
                     if report.retainsAudio == true { continue }
                     guard report.canPurge else {
-                        deferred.append("\(day.localDate) 的备份尚未齐全，原音继续保留。")
+                        if !report.meetings.isEmpty { deferDay(.backup) }
                         continue
                     }
                     try Task.checkCancellation()
@@ -209,20 +319,32 @@ extension PhoneJournal {
                     try store.completeCleanup(day)
                     notifyWatchPurge(try store.pendingPurgeIDs())
                 } catch is CancellationError { throw CancellationError() }
-                catch { deferred.append("\(day.localDate)：\(error.localizedDescription)") }
+                catch {
+                    let reason: DailyAnalysisIssue
+                    switch error {
+                    case WorkDeferred.network, is URLError: reason = .network
+                    case WorkDeferred.configuration, AnalysisError.missingCredential, AnalysisError.http(401), AnalysisError.http(403):
+                        reason = .settings
+                    case WorkDeferred.cooldown: reason = .cooldown
+                    case AnalysisError.unreadableAudio: reason = .audio
+                    default: reason = backingUp ? .backup : .archive
+                    }
+                    deferDay(reason, detail: error.localizedDescription)
+                }
             }
-            if !deferred.isEmpty {
-                dailyStatus = "分析或备份未完成，原音已保留。\n" + deferred.prefix(3).joined(separator: "\n")
+            if !dailyIssues.isEmpty {
+                dailyStatus = "部分日期尚未完成。待处理或待备份的原音继续保留。"
                 return false
             }
-            dailyStatus = "已完成手机已收到的结束日期录音；后续同步会继续处理。日报、纪要和来源已保留。"
+            dailyStatus = (preview != nil ? "已完成此次确认的录音整理。" : "已完成手机已收到的结束日期录音。")
                 + (settings.keepReviewAudio == true ? "原音继续保留，可回听引用。" : "")
             return true
         } catch is CancellationError {
             dailyStatus = "分析已暂停，已保存进度。原音保留与清理遵循日报设置。"
             return false
         } catch {
-            dailyStatus = "分析或备份未完成，原音已保留。\(error.localizedDescription)"
+            dailyStatus = healthReadError == nil ? "整理未完成：\(error.localizedDescription)" :
+                "健康数据读取未完成。请到「健康」页查看原因并重试；本次未清理原音。"
             return false
         }
     }

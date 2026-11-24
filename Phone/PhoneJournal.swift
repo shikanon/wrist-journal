@@ -9,11 +9,16 @@ final class PhoneJournal: ObservableObject {
     @Published private(set) var jobs: [UUID: MeetingAnalysisJob] = [:]
     @Published private(set) var analyzing: UUID?
     @Published private(set) var syncStatus: String?
+    @Published private(set) var lastWatchImport = UserDefaults.standard.object(forKey: "lastWatchAudioImport") as? Date
+    private var syncRequestID: UUID?
     @Published private(set) var hasPersonalKey = ArkCredential.personal.load() != nil
     @Published private(set) var hasOfficialKey = false
     @Published var days: [DailyJournalReport] = []
     @Published var processingDays = false
     @Published var dailyStatus: String?
+    @Published var dailyIssues: [DailyAnalysisIssue: [String]] = [:]
+    @Published var readingHealth = false
+    @Published var healthReadError: String?
     @Published private(set) var hasMoreRecordings = false
     @Published private(set) var hasMoreDays = false
     private var recordingLimit = 50
@@ -53,6 +58,7 @@ final class PhoneJournal: ObservableObject {
     lazy var cloudBackup = CloudBackup()
     lazy var localDownload = LocalDownloadServer(store: store)
     @Published var storageSyncStatus: String?
+    @Published var lastCloudSync = UserDefaults.standard.object(forKey: "lastCloudAudioSync") as? Date
     var synchronizingStorage = false
     var sourceTask: Task<Void, Never>?
     private var worker: Task<Void, Never>?
@@ -131,11 +137,19 @@ final class PhoneJournal: ObservableObject {
     }) { [weak self] event in
         Task { @MainActor [weak self] in
             switch event {
-            case .updated:
-                let before = self?.recordings.count
+            case .updated, .recordingImported:
+                if case let .recordingImported(date) = event, let self {
+                    self.syncRequestID = nil
+                    self.syncStatus = "已收到手表录音"
+                    let latest = max(date, self.lastWatchImport ?? .distantPast)
+                    self.lastWatchImport = latest
+                    UserDefaults.standard.set(latest, forKey: "lastWatchAudioImport")
+                }
                 self?.reload()
-                if self?.recordings.count != before { self?.syncStatus = "已收到手表录音" }
                 if UIApplication.shared.applicationState == .active { self?.foregroundEntered() }
+            case .syncFallback(let id, let queued):
+                guard let self, self.syncRequestID == id else { return }
+                self.syncStatus = queued ? "等待手表 · 请求已排队" : "无法连接手表"
             case .cloudAvailable:
                 UserDefaults.standard.set(true, forKey: "cloudInboxEnabled")
                 self?.scheduleSourceSync(force: true)
@@ -222,7 +236,17 @@ final class PhoneJournal: ObservableObject {
             guard let entry = recordings.first else { throw JournalError.invalidTransfer }
             let cloudFailure = ProcessInfo.processInfo.arguments.contains("-journal-fixture-cloud-failure")
             dailySettings.cloudBackup = cloudFailure
-            let success = await processDays(automatic: false)
+            let scope = try analysisPreview()
+            guard scope.days.count == 1, scope.recordingCount == 1,
+                  scope.days[0].needsBackup == cloudFailure else { throw JournalError.invalidTransfer }
+            // Arrives after the confirmation, on the very same day. It must not change this run.
+            let damaged = Recording(id: UUID(), startedAt: entry.startedAt, duration: 10,
+                state: .damaged, note: "模拟损坏录音", timeZoneIdentifier: entry.timeZoneIdentifier)
+            if !cloudFailure {
+                try store.save(damaged)
+                try Data([0]).write(to: store.audio(damaged.id))
+            }
+            let success = await processDays(automatic: false, preview: scope)
             let saved = try store.recording(entry.id)
             let exists = FileManager.default.fileExists(atPath: try store.audio(entry.id).path)
             let digests = days.flatMap(\.meetings)
@@ -233,7 +257,7 @@ final class PhoneJournal: ObservableObject {
                   (saved.rawDeletedAt == nil) == cloudFailure else { throw JournalError.invalidTransfer }
             if cloudFailure {
                 let day = JournalDayKey(recording: entry)
-                guard dailyStatus?.hasPrefix("分析或备份未完成，原音已保留。") == true,
+                guard dailyIssues[.backup]?.isEmpty == false,
                       let deadline = workState.backupRetries[day.id]?.nextAttempt else {
                     throw JournalError.invalidTransfer
                 }
@@ -250,13 +274,9 @@ final class PhoneJournal: ObservableObject {
             }
             if !cloudFailure {
                 guard jobs[entry.id]?.notes.isEmpty == true else { throw JournalError.invalidTransfer }
-                _ = await processDays(automatic: false)
-                guard days.flatMap(\.meetings).count == 1 else { throw JournalError.invalidTransfer }
-                let damaged = Recording(id: UUID(), startedAt: entry.startedAt, duration: 10,
-                    state: .damaged, note: "模拟损坏录音", timeZoneIdentifier: entry.timeZoneIdentifier)
-                try store.save(damaged)
-                try Data([0]).write(to: store.audio(damaged.id))
                 guard await processDays(automatic: false) == false,
+                      dailyIssues[.audio]?.isEmpty == false,
+                      days.flatMap(\.meetings).count == 1,
                       try store.recording(damaged.id).rawDeletedAt == nil,
                       FileManager.default.fileExists(atPath: try store.audio(damaged.id).path) else {
                     throw JournalError.invalidTransfer
@@ -271,6 +291,7 @@ final class PhoneJournal: ObservableObject {
                         "healthDayCount": days.count, "originalExists": exists,
                         "minutesPreserved": digests[0].minutes.contains("行动项"),
                         "weeklyMonthlyVerified": true, "damagedDayRetained": !cloudFailure,
+                        "lateRecordingExcludedFromConfirmedScope": !cloudFailure,
                         "backupCooldownVerified": cloudFailure, "legacyBackupRetried": cloudFailure]
         } catch {
             evidence = ["passed": false, "error": error.localizedDescription]
@@ -299,21 +320,24 @@ final class PhoneJournal: ObservableObject {
     #endif
 
     func syncRecordings() {
-        requestRecordings(endedOnly: false)
-        scheduleSourceSync(force: true)
+        requestRecordings(endedOnly: false, showStatus: true)
+        scheduleSourceSync(force: true, requestWatch: false)
     }
 
-    func requestRecordings(endedOnly: Bool) {
+    func requestRecordings(endedOnly: Bool, showStatus: Bool = false) {
+        let requestID = showStatus ? UUID() : nil
+        if let requestID { syncRequestID = requestID }
         do {
             try transfer.publishSettings(storage: storage, settings: dailySettings)
             let known = try store.pendingRecordings().lazy.filter { entry in
                 guard entry.isPlayable, let url = try? self.store.audio(entry.id) else { return false }
                 return FileManager.default.fileExists(atPath: url.path)
             }.prefix(500).map(\.id)
-            let direct = try transfer.syncRecordings(known: Array(known), purged: store.pendingPurgeIDs(), endedOnly: endedOnly)
-            syncStatus = direct ? "正在请求录音，文件会陆续到达" : "已排队，手表可用后会自动同步"
+            let direct = try transfer.syncRecordings(known: Array(known), purged: store.pendingPurgeIDs(),
+                                                     endedOnly: endedOnly, requestID: requestID)
+            if showStatus { syncStatus = direct ? "已请求 · 等待录音" : "等待手表 · 请求已排队" }
         } catch {
-            syncStatus = error.localizedDescription
+            if showStatus { syncStatus = "无法连接手表" }
         }
     }
 
@@ -474,11 +498,13 @@ final class PhoneJournal: ObservableObject {
             days = Array(history.prefix(dayLimit))
             reportIsDaily = false
             if let latest = days.map(\.generatedAt).max(), latest >= (report?.generatedAt ?? .distantPast) {
-                report = HealthReport(generatedAt: latest,
-                    timeZone: dailySettings.healthTimeZoneIdentifier ?? TimeZone.current.identifier,
-                    days: Array(JournalReview(id: "health", days: days).healthDays.suffix(7)),
-                    unavailableMetrics: [])
-                reportIsDaily = true
+                let recentHealth = Array(JournalReview(id: "health", days: days).healthDays.suffix(7))
+                if recentHealth.contains(where: { !$0.metrics.isEmpty }) || report == nil {
+                    report = HealthReport(generatedAt: latest,
+                        timeZone: dailySettings.healthTimeZoneIdentifier ?? TimeZone.current.identifier,
+                        days: recentHealth, unavailableMetrics: [])
+                    reportIsDaily = true
+                }
             }
         } catch {
             message = error.localizedDescription
@@ -488,13 +514,43 @@ final class PhoneJournal: ObservableObject {
     func loadMoreRecordings() { recordingLimit += 50; reload() }
     func loadMoreDays() { dayLimit += 31; reload() }
 
-    func authorizeDailyHealth() async {
+    func updateHealthReading(enabled: Bool) {
+        dailySettings.healthEnabled = enabled
+        healthReadError = nil
+        if enabled { Task { await refreshHealthFromScreen(requestAccess: true) } }
+    }
+
+    func refreshHealthFromScreen(requestAccess: Bool = false) async {
+        guard processingMode != .none, dailySettings.healthEnabled, !processingDays, !readingHealth else { return }
+        readingHealth = true
+        defer { readingHealth = false; reload() }
+        let generation = processingGeneration
         do {
-            try await dailyHealth.authorize()
-            workState.dirtyHealthDays.formUnion(try store.dailyKeys())
-            try workState.save(store)
+            if requestAccess {
+                try await dailyHealth.authorize()
+                guard generation == processingGeneration else { return }
+                workState.dirtyHealthDays.formUnion(try store.dailyKeys())
+                try workState.save(store)
+            }
+            _ = try await readLocalHealth()
+        } catch is CancellationError {
+        } catch {
+            if generation == processingGeneration { healthReadError = error.localizedDescription }
         }
-        catch { message = error.localizedDescription }
+    }
+
+    func readLocalHealth() async throws -> [UUID: MeetingHealthData] {
+        let generation = processingGeneration
+        do {
+            let samples = try await refreshLocalHealth()
+            if generation == processingGeneration { healthReadError = nil }
+            return samples
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if generation == processingGeneration { healthReadError = error.localizedDescription }
+            throw error
+        }
     }
 
     func analyzeForDay(_ entry: Recording, automatic: Bool = false, externalPowerGranted: Bool = false) async throws -> MeetingAnalysisJob {

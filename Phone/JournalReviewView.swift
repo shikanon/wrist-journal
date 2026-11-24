@@ -3,7 +3,7 @@ import SwiftUI
 struct JournalReviewView: View {
     @ObservedObject var journal: PhoneJournal
     @State private var period = 0
-    @State private var confirm = false
+    @State private var preview: DailyAnalysisPreview?
 
     var body: some View {
         #if DEBUG
@@ -27,8 +27,11 @@ struct JournalReviewView: View {
                     Text("每周").tag(1)
                     Text("每月").tag(2)
                 }.pickerStyle(.segmented)
-                Button(journal.processingMode == .watch ? "请求 Watch 处理并归档" : "分析已结束日期") { confirm = true }
-                    .disabled(journal.processingMode == .none || journal.processingDays || journal.hasAnalysisWorker)
+                Button(journal.processingMode == .watch ? "请求 Watch 处理并归档" : "分析已结束日期") {
+                    do { preview = try journal.analysisPreview() }
+                    catch { journal.message = "无法读取待分析录音：\(error.localizedDescription)" }
+                }
+                .disabled(journal.processingMode == .none || journal.processingDays || journal.hasAnalysisWorker || journal.readingHealth)
                 if journal.processingMode == .none {
                     Text("当前不处理，原音保留。请在设置中打开 Mac 临时下载。").font(.footnote)
                 }
@@ -36,6 +39,20 @@ struct JournalReviewView: View {
                 if let status = journal.dailyStatus { Text(status).font(.footnote).foregroundStyle(.secondary) }
             } footer: {
                 Text("按录音开始时的当地日期归档。今日暂不清理；周和月回顾复用日报。")
+            }
+            ForEach(DailyAnalysisIssue.allCases) { issue in
+                if let details = journal.dailyIssues[issue], !journal.processingDays {
+                    DisclosureGroup {
+                        ForEach(Array(details.enumerated()), id: \.offset) { _, detail in
+                            Text(detail).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(issue.title) · \(details.count) 个归档日")
+                            Text(issue.nextStep).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             if journal.hasMoreDays {
                 Section {
@@ -53,14 +70,14 @@ struct JournalReviewView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(day.day.localDate)
-                            Text("\(day.meetings.count) 段会议 · \(day.day.timeZoneIdentifier)")
+                            Text(dayLabel(day))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
             } else {
                 ForEach(JournalReview.grouped(journal.days, monthly: period == 2)) { review in
-                    Section(review.id) {
+                    Section(review.title) {
                         LabeledContent("会议", value: "\(review.meetingCount) 段 · \(durationText(review.duration))")
                         ForEach(HealthMetric.allCases) { metric in
                             let health = HealthReport(generatedAt: .now, timeZone: "各日报当地时区",
@@ -72,7 +89,7 @@ struct JournalReviewView: View {
                         LabeledContent("未发现运动的心率与语音重合", value: "\(review.sedentaryEvents) 次")
                         LabeledContent("伴随运动的重合", value: "\(review.activityEvents) 次")
                         ForEach(review.days) { day in
-                            NavigationLink(day.day.localDate + " · " + day.day.timeZoneIdentifier) {
+                            NavigationLink(day.day.localDate + " · " + dayLabel(day)) {
                                 DailyReportView(journal: journal, report: day)
                             }
                         }
@@ -81,11 +98,70 @@ struct JournalReviewView: View {
             }
         }
         .navigationTitle("回顾")
-        .confirmationDialog(journal.dailySettings.keepReviewAudio == true ? "分析结束日期的录音并保留原音？" : "分析并清理结束日期的原音？", isPresented: $confirm) {
-            Button("开始每日分析") { Task { _ = await journal.processDays(automatic: false) } }
-        } message: {
-            Text("录音会分段发送到火山方舟。日报保留纪要、转写摘录、时间标记和关联结果。"
-                 + (journal.dailySettings.keepReviewAudio == true ? "当前设置保留原音，可以回听。" : "当前设置在日报和所需备份成功后清理原音，之后引用只能查看原文。可在设置中开启「日报后保留原音」。"))
+        .sheet(item: $preview) { scope in
+            DailyAnalysisConfirmation(scope: scope) {
+                preview = nil
+                Task { _ = await journal.processDays(automatic: false, preview: scope) }
+            }
+        }
+    }
+
+    private func dayLabel(_ report: DailyJournalReport) -> String {
+        let zone = report.day.calendar.timeZone
+        let offsets = Set(report.meetings.map { JournalDayKey.utcOffset(at: $0.startedAt, in: zone) })
+            .sorted()
+        if !offsets.isEmpty { return "\(report.meetings.count) 段会议 · " + offsets.joined(separator: " / ") }
+        return "健康日报"
+    }
+}
+
+private struct DailyAnalysisConfirmation: View {
+    @Environment(\.dismiss) private var dismiss
+    let scope: DailyAnalysisPreview
+    let confirm: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if scope.days.isEmpty {
+                    ContentUnavailableView("暂无待整理录音", systemImage: "calendar.badge.checkmark",
+                        description: Text("可先到录音页同步手表。还没结束的录制地日期会留到以后处理。"))
+                } else {
+                    Section("\(scope.days.count) 个归档日 · \(scope.recordingCount) 段") {
+                        ForEach(scope.days) { day in
+                            LabeledContent(day.key.localDate) {
+                                VStack(alignment: .trailing, spacing: 3) {
+                                    Text(day.recordingIDs.isEmpty ? "续做归档或清理" : "\(day.recordingIDs.count) 段")
+                                    Text(day.key.timeZoneIdentifier + (day.needsBackup ? " · 有备份要求" : ""))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    Section("原音去向") {
+                        Text(scope.retainsAudio ? "保留原音；本机有音频时可以继续回听。" :
+                             "仅清理上述日期中已归档且满足备份要求的原音。清理后仍可查看纪要、标记和原文。")
+                        Text(scope.mode == .watch ? "待分析的录音由 Watch 分段发送到火山方舟；结果回传后再归档。" :
+                             "待分析的录音由 iPhone 分段发送到火山方舟。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("确认分析范围")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !scope.days.isEmpty {
+                    Button(action: confirm) {
+                        Text("开始每日分析").frame(maxWidth: .infinity, minHeight: 28)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(12)
+                    .background(.regularMaterial)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+            }
         }
     }
 }
@@ -103,12 +179,13 @@ private struct SourceReviewPreview: View {
             if let meeting {
                 Section("纪要") { Text(meeting.minutes) }
                 Section("来源与标记") {
-                    RecordingSourcesView(store: journal.store, recordingID: meeting.id,
-                        citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback)
+                    RecordingSourcesView(store: journal.store, recordingID: meeting.id, recordingTitle: meeting.title,
+                        citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback, showsCitations: true)
                 }
             } else { ProgressView("正在载入来源") }
         }
         .navigationTitle("来源回顾")
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReviewPlaybackBar(playback: playback) }
         .task(id: meeting.map { journal.store.sourceAudio($0.id).detail }) {
             guard let meeting else { return }
             try? JSONSerialization.data(withJSONObject: [
@@ -131,16 +208,14 @@ private struct DailyReportView: View {
         List {
             ForEach(report.meetings) { meeting in
                 Section(meeting.title) {
-                    Text(meeting.startedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened,
-                                                                     timeZone: report.day.calendar.timeZone))
-                         + " · " + durationText(meeting.duration))
+                    Text(report.day.recordingTime(meeting.startedAt) + " · " + durationText(meeting.duration))
                     if let continuation = meeting.continuation {
                         Text(continuation.detail).font(.footnote).foregroundStyle(.orange)
                     }
                     Text(meeting.minutes).textSelection(.enabled)
                     MeetingLocationView(location: meeting.location)
                     ShareLink(item: meeting.shareText) { Label("分享纪要与来源", systemImage: "square.and.arrow.up") }
-                    RecordingSourcesView(store: journal.store, recordingID: meeting.id,
+                    RecordingSourcesView(store: journal.store, recordingID: meeting.id, recordingTitle: meeting.title,
                         citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback)
                     ForEach(meeting.events) { event in
                         VStack(alignment: .leading, spacing: 4) {
@@ -173,7 +248,34 @@ private struct DailyReportView: View {
                 }
             }
         }.navigationTitle(report.day.localDate)
+            .safeAreaInset(edge: .bottom, spacing: 0) { ReviewPlaybackBar(playback: playback) }
             .onDisappear { playback.stop() }
+    }
+}
+
+private struct ReviewPlaybackBar: View {
+    @ObservedObject var playback: LocalPlayback
+
+    var body: some View {
+        if let source = playback.source, playback.playing {
+            HStack(spacing: 12) {
+                Image(systemName: "waveform").foregroundStyle(.teal).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(source.recordingTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    Text(source.detail).font(.caption).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("正在回听：\(source.recordingTitle)，\(source.detail)")
+                Spacer(minLength: 0)
+                Button { playback.stop() } label: {
+                    Image(systemName: "stop.circle.fill").font(.title2).frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("停止回听")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.regularMaterial)
+        }
     }
 }
 
@@ -181,9 +283,11 @@ private struct DailyReportView: View {
 struct RecordingSourcesView: View {
     let store: JournalStore
     let recordingID: UUID
+    let recordingTitle: String
     let citations: [SourceCitation]
     let markers: [RecordingMarker]
     @ObservedObject var playback: LocalPlayback
+    @State var showsCitations = false
     @State private var error: String?
 
     var body: some View {
@@ -194,7 +298,7 @@ struct RecordingSourcesView: View {
                 ForEach(markers) { marker in
                     let label = "\(marker.label) · \(durationText(marker.offset))"
                     if audio.url != nil {
-                        Button { play(at: marker.offset) } label: {
+                        Button { play(at: marker.offset, detail: label) } label: {
                             Label(label, systemImage: "bookmark")
                         }
                         .accessibilityHint("回听此标记")
@@ -203,48 +307,52 @@ struct RecordingSourcesView: View {
                     }
                 }
             }
-            Text("有来源的要点").font(.headline)
             if citations.isEmpty {
                 Text("暂无可用的原文引用。分析完成后可查看返回的来源；旧纪要不会自动补造原文。")
                     .font(.footnote).foregroundStyle(.secondary)
-            }
-            ForEach(citations) { citation in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(citation.statement).font(.subheadline.weight(.semibold)).textSelection(.enabled)
-                    Text("转写原文（AI 识别）").font(.caption).foregroundStyle(.secondary)
-                    Text("「\(citation.quote)」").textSelection(.enabled)
-                    if audio.url != nil {
-                        Button { play(at: max(0, citation.startSeconds - 1)) } label: {
-                            Label("回听约 \(citation.timeRange)", systemImage: "play.circle")
+            } else {
+                DisclosureGroup("原文引用 · \(citations.count) 条", isExpanded: $showsCitations) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(citations) { citation in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(citation.statement).font(.subheadline.weight(.semibold)).textSelection(.enabled)
+                                Text("转写原文（AI 识别）").font(.caption).foregroundStyle(.secondary)
+                                Text("「\(citation.quote)」").textSelection(.enabled)
+                                if audio.url != nil {
+                                    Button { play(at: max(0, citation.startSeconds - 1), detail: "原文引用 · 约 \(citation.timeRange)") } label: {
+                                        Label("回听约 \(citation.timeRange)", systemImage: "play.circle")
+                                    }
+                                } else {
+                                    Label("原音约 \(citation.timeRange)", systemImage: "clock")
+                                        .font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                ShareLink(item: citation.shareText) { Label("分享此来源", systemImage: "square.and.arrow.up") }
+                                    .font(.footnote)
+                            }
+                            Divider()
                         }
-                    } else {
-                        Label("原音约 \(citation.timeRange)", systemImage: "clock")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        Text(audio.url == nil ? "转写和时间为 AI 估计。" : "转写和时间为 AI 估计，可从引用前 1 秒回听核对。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    ShareLink(item: citation.shareText) { Label("分享此来源", systemImage: "square.and.arrow.up") }
-                        .font(.footnote)
+                    .padding(.top, 6)
                 }
-                Divider()
             }
             if !citations.isEmpty || !markers.isEmpty {
                 Text(audio.detail).font(.footnote).foregroundStyle(.secondary)
-                if !citations.isEmpty {
-                    Text(audio.url == nil ? "转写和时间为 AI 估计。" : "转写和时间为 AI 估计，可从引用前 1 秒回听核对。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if audio.url != nil, playback.playing { Button("停止回听") { playback.stop() } }
             }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
         .buttonStyle(.borderless)
     }
 
-    private func play(at offset: TimeInterval) {
+    private func play(at offset: TimeInterval, detail: String) {
         // Recheck at the moment of action; a daily cleanup may have run since rendering.
         let availability = store.sourceAudio(recordingID)
         guard let url = availability.url else { error = availability.detail; return }
-        do { try playback.play(url, startingAt: offset); error = nil }
+        do {
+            try playback.play(url, startingAt: offset, source: PlaybackSource(recordingTitle: recordingTitle, detail: detail))
+            error = nil
+        }
         catch { self.error = error.localizedDescription }
     }
 }

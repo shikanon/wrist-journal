@@ -39,6 +39,17 @@ struct JournalDayKey: Codable, Hashable, Identifiable, Sendable {
         self.init(date: recording.startedAt, timeZone: recording.timeZoneIdentifier ?? TimeZone.current.identifier)
     }
     func hasEnded(at date: Date = .now) -> Bool { interval.map { $0.end <= date } ?? false }
+
+    func recordingTime(_ date: Date, includeDate: Bool = false) -> String {
+        let time = date.formatted(Date.FormatStyle(date: includeDate ? .abbreviated : .omitted,
+                                                   time: .shortened, calendar: calendar, timeZone: calendar.timeZone))
+        return "\(time) · \(Self.utcOffset(at: date, in: calendar.timeZone))"
+    }
+
+    static func utcOffset(at date: Date, in zone: TimeZone) -> String {
+        let minutes = zone.secondsFromGMT(for: date) / 60
+        return String(format: "UTC%@%02d:%02d", minutes < 0 ? "−" : "+", abs(minutes) / 60, abs(minutes) % 60)
+    }
 }
 
 struct SpeechWindow: Codable, Sendable {
@@ -262,6 +273,13 @@ struct JournalReview: Identifiable {
     var duration: TimeInterval { days.flatMap(\.meetings).reduce(0) { $0 + $1.duration } }
     var sedentaryEvents: Int { days.flatMap(\.meetings).flatMap(\.events).filter { !$0.activityPresent }.count }
     var activityEvents: Int { days.flatMap(\.meetings).flatMap(\.events).filter(\.activityPresent).count }
+    var title: String {
+        guard id.contains("-W"), let day = days.first?.day, let start = day.interval?.start else { return id }
+        let calendar = Self.weekCalendar(day)
+        guard let week = calendar.dateInterval(of: .weekOfYear, for: start),
+              let sunday = calendar.date(byAdding: .day, value: -1, to: week.end) else { return id }
+        return "\(JournalDayKey(date: week.start, timeZone: day.timeZoneIdentifier).localDate) 至 \(JournalDayKey(date: sunday, timeZone: day.timeZoneIdentifier).localDate)"
+    }
     var healthDays: [HealthDay] {
         // Multiple meetings may use different time zones on the same date; count the fixed-zone health day once.
         Dictionary(grouping: days.map(\.health), by: \.start).values.compactMap {
@@ -273,13 +291,17 @@ struct JournalReview: Identifiable {
         let grouped = Dictionary(grouping: days) { report in
             if monthly { return String(report.day.localDate.prefix(7)) }
             guard let start = report.day.interval?.start else { return report.day.localDate }
-            var calendar = report.day.calendar
-            calendar.firstWeekday = 2
-            calendar.minimumDaysInFirstWeek = 4
-            let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)
+            let components = weekCalendar(report.day).dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)
             return String(format: "%04d-W%02d", components.yearForWeekOfYear ?? 0, components.weekOfYear ?? 0)
         }
         return grouped.map { Self(id: $0.key, days: $0.value.sorted { $0.day.localDate > $1.day.localDate }) }
             .sorted { $0.id > $1.id }
+    }
+
+    private static func weekCalendar(_ day: JournalDayKey) -> Calendar {
+        var calendar = day.calendar
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        return calendar
     }
 }

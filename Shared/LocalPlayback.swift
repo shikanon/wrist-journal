@@ -1,9 +1,15 @@
 import AVFoundation
 import SwiftUI
 
+struct PlaybackSource {
+    let recordingTitle: String
+    let detail: String
+}
+
 @MainActor
 final class LocalPlayback: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var playing = false
+    @Published private(set) var source: PlaybackSource?
     private var player: AVAudioPlayer?
 
     var position: TimeInterval { player?.currentTime ?? 0 }
@@ -12,7 +18,7 @@ final class LocalPlayback: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if let player { player.currentTime = min(max(0, time), player.duration) }
     }
 
-    func play(_ url: URL, startingAt time: TimeInterval = 0) throws {
+    func play(_ url: URL, startingAt time: TimeInterval = 0, source: PlaybackSource? = nil) throws {
         stop()
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback)
@@ -23,6 +29,7 @@ final class LocalPlayback: NSObject, ObservableObject, AVAudioPlayerDelegate {
             player.currentTime = min(max(0, time), player.duration)
             guard player.play() else { throw JournalError.playbackFailed }
             self.player = player
+            self.source = source
             playing = true
         } catch {
             try? session.setActive(false)
@@ -34,6 +41,7 @@ final class LocalPlayback: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard let player else { return }
         player.stop()
         self.player = nil
+        source = nil
         playing = false
         try? AVAudioSession.sharedInstance().setActive(false)
     }

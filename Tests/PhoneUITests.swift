@@ -9,6 +9,9 @@ final class PhoneUITests: XCTestCase {
 
         app.tabBars.buttons["设置"].tap()
         XCTAssertTrue(app.staticTexts["录音存储"].waitForExistence(timeout: 5))
+        let advanced = app.staticTexts["进阶设置"]
+        for _ in 0..<3 where !advanced.isHittable { app.swipeUp() }
+        advanced.tap()
         XCTAssertTrue(app.staticTexts["API Key 来源"].exists)
         XCTAssertTrue(app.secureTextFields["输入个人 API Key"].exists)
 
@@ -24,6 +27,8 @@ final class PhoneUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.tabBars.buttons["设置"].tap()
+        for _ in 0..<3 where !advanced.isHittable { app.swipeUp() }
+        advanced.tap()
         app.swipeUp()
         XCTAssertEqual(context.value as? String, updated)
         switchControl.tap()
@@ -38,11 +43,13 @@ final class PhoneUITests: XCTestCase {
         let analyze = app.buttons["分析已结束日期"]
         XCTAssertTrue(analyze.waitForExistence(timeout: 8))
         analyze.tap()
+        XCTAssertTrue(app.navigationBars["确认分析范围"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1 个归档日 · 1 段"].exists)
         app.buttons["开始每日分析"].tap()
-        let done = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "已完成手机已收到的结束日期录音")).firstMatch
+        let done = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "已完成此次确认的录音整理")).firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 10))
         // One saved day in the isolated fixture store.
-        let dayLink = app.cells.containing(.staticText, identifier: "1 段会议 · Asia/Shanghai").firstMatch
+        let dayLink = app.cells.containing(.staticText, identifier: "1 段会议 · UTC+08:00").firstMatch
         XCTAssertTrue(dayLink.exists)
         dayLink.tap()
         XCTAssertTrue(app.staticTexts["模拟纪要：确认差旅会议的行动项，下周跟进。"].waitForExistence(timeout: 5))
@@ -71,12 +78,14 @@ final class PhoneUITests: XCTestCase {
 
     @MainActor
     private func assertMeetingMap(in app: XCUIApplication) {
-        let openMap = app.descendants(matching: .any).matching(identifier: "meeting-location.open-maps").firstMatch
+        let preview = app.descendants(matching: .any).matching(identifier: "meeting-location.preview").firstMatch
         for _ in 0..<4 {
-            if openMap.isHittable { break }
+            if preview.isHittable { break }
             app.swipeUp()
         }
-        XCTAssertTrue(openMap.isHittable)
+        XCTAssertTrue(preview.isHittable)
+        XCTAssertFalse(app.buttons["在 Apple 地图中打开"].exists)
+        XCTAssertFalse(app.links["在 Apple 地图中打开"].exists)
         XCTAssertTrue(app.staticTexts["录音开始附近 · 约 150 米范围"].exists)
         XCTAssertFalse(app.staticTexts["会议地点（粗略）：31.230, 121.474"].exists)
     }
@@ -97,7 +106,7 @@ final class PhoneUITests: XCTestCase {
         app.tabBars.buttons["回顾"].tap()
         app.buttons["分析已结束日期"].tap()
         app.buttons["开始每日分析"].tap()
-        let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "分析或备份未完成，原音已保留。")).firstMatch
+        let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "云备份未完成")).firstMatch
         XCTAssertTrue(failed.waitForExistence(timeout: 10))
         app.tabBars.buttons["录音"].tap()
         XCTAssertFalse(app.staticTexts["原音已清理 · 纪要在回顾中保留"].exists)

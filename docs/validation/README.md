@@ -1,5 +1,7 @@
 # 模拟验证证据
 
+2026-11-24 体验优化：核心、存储和处理共 110 项 Swift 检查、37 项续录与来源检查通过。五项应用内模拟回归及两端处理夹具通过；确认分析后才出现的同日录音不被当次处理，云备份失败仍保留原音。iPhone 模拟器中，录音详情和日报均显示合成会议地点的实际底图与 150 米范围圈，无外跳入口。两端 Release 与 XCTest 测试包均编译通过；XCTest 未运行，配对同步、真机地图、触摸及真实健康读取仍在 [README 真机验收 TODO](../../README.md#真机验收-todoopen)。
+
 2026-11-23 连续录音与来源回顾更新：
 
 - [37 项新特性回归](continuity/continuity-regression.txt)，加上 [103 项核心回归](continuity/core-regression.txt)与 [24 项交互状态回归](continuity/recording-experience.txt)，累计 164 项。

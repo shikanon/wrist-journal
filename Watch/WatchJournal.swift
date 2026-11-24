@@ -25,6 +25,7 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
     @Published var processingStatus: String?
     @Published var processingID: UUID?
     @Published var watchMinutes: [UUID: String] = [:]
+    @Published private(set) var recentReviewEntries: [Recording] = []
     var processingTask: Task<Void, Never>?
     var activeProcessingConfiguration: ProcessingConfiguration?
     let watchAnalyzer = MeetingAnalyzer()
@@ -351,11 +352,14 @@ final class WatchJournal: NSObject, ObservableObject, AVAudioRecorderDelegate, @
                 publishReceipt(for: recovered, interrupted: true)
                 return recovered
             }.filter { $0.state != .recording && $0.rawDeletedAt == nil && !($0.storage == .phone && $0.localEvictedAt != nil) }
+                .sorted { $0.startedAt > $1.startedAt }
             report = try store.report()
-            watchMinutes = [:]
-            for entry in try store.list(limit: 30) {
-                if let job = try store.analysis(entry.id), job.state == .complete { watchMinutes[entry.id] = job.minutes }
+            recentReviewEntries = try store.list(limit: 30)
+            var minutes: [UUID: String] = [:]
+            for entry in recentReviewEntries {
+                if let job = try store.analysis(entry.id), job.state == .complete { minutes[entry.id] = job.minutes }
             }
+            watchMinutes = minutes
         } catch {
             message = error.localizedDescription
         }

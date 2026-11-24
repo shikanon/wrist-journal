@@ -6,6 +6,7 @@ extension PhoneJournal {
     func refreshLocalHealth() async throws -> [UUID: MeetingHealthData] {
         guard processingMode != .none else { throw CancellationError() }
         guard dailySettings.healthEnabled else { return [:] }
+        let generation = processingGeneration
         let zone = dailySettings.healthTimeZoneIdentifier ?? TimeZone.current.identifier
         let today = JournalDayKey(date: .now, timeZone: zone)
         guard let todayStart = today.interval?.start else { return [:] }
@@ -36,10 +37,11 @@ extension PhoneJournal {
             ?? calendar.date(byAdding: .day, value: -7, to: todayStart)!
         let syncURL = try store.localStateURL("health-sync.json")
         let changed = try await dailyHealth.changedIntervals(at: syncURL, since: origin.addingTimeInterval(-300))
-        guard processingMode != .none else { throw CancellationError() }
+        guard generation == processingGeneration else { throw CancellationError() }
         workState.dirtyHealthDays.formUnion(try store.affectedHealthDays(changed))
         try workState.save(store)
         try await dailyHealth.acknowledgeChanges(at: syncURL)
+        guard generation == processingGeneration else { throw CancellationError() }
 
         var healthCache: [JournalDayKey: HealthDay] = [:]
         var meetingCache: [UUID: MeetingHealthData] = [:]
@@ -56,7 +58,7 @@ extension PhoneJournal {
                     Recording(id: meeting.id, startedAt: meeting.startedAt, duration: meeting.duration, state: .saved)
             }
             let samples = try await dailyHealth.meetings(Array(entries.values))
-            guard processingMode != .none else { throw CancellationError() }
+            guard generation == processingGeneration else { throw CancellationError() }
             meetingCache.merge(samples) { _, new in new }
             let health: HealthDay
             if let cached = healthCache[healthKey] { health = cached }
@@ -64,7 +66,7 @@ extension PhoneJournal {
                 health = try await dailyHealth.daily(healthKey)
                 healthCache[healthKey] = health
             }
-            guard processingMode != .none else { throw CancellationError() }
+            guard generation == processingGeneration else { throw CancellationError() }
             let meetings = (previous?.meetings ?? []).map { meeting -> MeetingDigest in
                 guard let speech = meeting.speechWindows, let samples = samples[meeting.id] else { return meeting }
                 return MeetingDigest(id: meeting.id, startedAt: meeting.startedAt, duration: meeting.duration,

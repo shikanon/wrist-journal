@@ -139,8 +139,11 @@ struct JournalStore {
     }
     func sourceAudio(_ id: UUID) -> SourceAudioAvailability {
         guard let entry = try? recording(id) else { return .unavailable }
+        return sourceAudio(entry)
+    }
+    func sourceAudio(_ entry: Recording) -> SourceAudioAvailability {
         if entry.rawDeletedAt != nil { return .cleaned }
-        guard entry.isPlayable, let url = try? audio(id), files.fileExists(atPath: url.path) else { return .unavailable }
+        guard entry.isPlayable, let url = try? audio(entry.id), files.fileExists(atPath: url.path) else { return .unavailable }
         return .available(url)
     }
     func list(offset: Int = 0, limit: Int = .max) throws -> [Recording] {
@@ -185,18 +188,20 @@ struct JournalStore {
             $0.pendingRecordings.remove(id)
         }
     }
-    func receive(_ source: URL, recording: Recording) throws {
+    /// True only when this import actually adds a local audio file.
+    @discardableResult
+    func receive(_ source: URL, recording: Recording) throws -> Bool {
         var recording = recording
         recording.localEvictedAt = nil
         guard recording.isPlayable, recording.duration.isFinite, recording.duration > 0, recording.validTimeline,
               let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
             throw JournalError.invalidTransfer
         }
-        try change { index in
+        return try change { index in
             if let previous = try? self.recording(recording.id) {
                 if previous.rawDeletedAt != nil {
                     try enqueuePurgeUnlocked(recording.id)
-                    return
+                    return false
                 }
                 recording.cloudUploadedAt = previous.cloudUploadedAt ?? recording.cloudUploadedAt
                 recording.motionWindows = previous.motionWindows ?? recording.motionWindows
@@ -209,7 +214,8 @@ struct JournalStore {
             }
             let destination = try folder(recording.id)
             let audioURL = try audio(recording.id)
-            if !files.fileExists(atPath: audioURL.path) {
+            let addsAudio = !files.fileExists(atPath: audioURL.path)
+            if addsAudio {
                 let staging = try root().appendingPathComponent(".incoming-\(UUID().uuidString)")
                 try files.createDirectory(at: staging, withIntermediateDirectories: false)
                 defer { try? files.removeItem(at: staging) }
@@ -223,6 +229,7 @@ struct JournalStore {
                 }
             }
             try write(recording, index: &index)
+            return addsAudio
         }
     }
 

@@ -201,6 +201,73 @@ private struct WatchHome: View {
 
 private struct WatchLibrary: View {
     @ObservedObject var journal: WatchJournal
+
+    var body: some View {
+        let visible = Set(journal.recordings.map(\.id))
+        let recent = (journal.recordings + journal.recentReviewEntries.filter {
+            !visible.contains($0.id) && $0.state != .recording
+        }).sorted { $0.startedAt > $1.startedAt }
+        List {
+            Section("最近录音") {
+                if recent.isEmpty {
+                    Text("暂无录音").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(recent.prefix(5)) { entry in
+                    recordingLink(entry)
+                }
+                if recent.count > 5 {
+                    NavigationLink("更多录音") {
+                        List {
+                            ForEach(recent) { entry in recordingLink(entry) }
+                        }
+                        .navigationTitle("更多录音")
+                    }
+                }
+            }
+            NavigationLink {
+                WatchHealth(journal: journal)
+            } label: {
+                Label("健康报告", systemImage: "heart.text.clipboard")
+            }
+            NavigationLink {
+                WatchLibrarySettings(journal: journal)
+            } label: {
+                Label("录音设置", systemImage: "gearshape")
+            }
+        }
+        .navigationTitle("录音与健康")
+    }
+
+    private func recordingLink(_ entry: Recording) -> some View {
+        NavigationLink {
+            WatchRecording(journal: journal, id: entry.id, note: entry.note)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.title).lineLimit(2)
+                Text(watchAudioStatus(entry, store: journal.store)).font(.caption2).foregroundStyle(.secondary)
+                if journal.watchMinutes[entry.id] != nil {
+                    Label("纪要已生成", systemImage: "doc.text").font(.caption2)
+                }
+            }
+        }
+    }
+}
+
+private func watchAudioStatus(_ entry: Recording, store: JournalStore) -> String {
+    let availability = store.sourceAudio(entry)
+    if availability == .cleaned { return "原音已清理" }
+    let playable = availability.url != nil
+    if entry.phoneReceivedAt != nil, entry.storage == .phone {
+        return playable ? "iPhone 已保存 · 手表可回听" : "已转移至 iPhone"
+    }
+    if entry.cloudUploadedAt != nil { return playable ? "已存 iCloud · 手表可回听" : "已存 iCloud · 手表无原音" }
+    guard playable else { return "手表无可播放原音" }
+    if entry.storage == .phone { return "手表暂存 · 等待 iPhone 保存" }
+    return "\(durationText(entry.duration)) · 手表可回听"
+}
+
+private struct WatchLibrarySettings: View {
+    @ObservedObject var journal: WatchJournal
     @AppStorage("immediateRecordingLock") private var immediateLock = true
 
     var body: some View {
@@ -224,45 +291,14 @@ private struct WatchLibrary: View {
                     .disabled(journal.current != nil || journal.starting || journal.recovery.pending != nil)
                     Text("将使用手机配置的接口上传录音并生成纪要。").font(.caption2)
                 }
-                ForEach(journal.watchMinutes.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
-                    NavigationLink(String((journal.watchMinutes[id] ?? "查看纪要").prefix(28))) {
-                        WatchReview(journal: journal, id: id)
-                    }
-                }
             }
-            Section("健康") {
-                NavigationLink {
-                    WatchHealth(journal: journal)
-                } label: {
-                    Label("健康报告", systemImage: "heart.text.clipboard")
-                }
-            }
-            Section("录音") {
+            Section("存储") {
                 Text(journal.transfer.storage.title).font(.caption)
                 if let status = journal.storageStatus { Text(status).font(.caption2).foregroundStyle(.secondary) }
-                if journal.recordings.isEmpty {
-                    Text("暂无录音").foregroundStyle(.secondary)
-                }
-                ForEach(journal.recordings) { entry in
-                    NavigationLink {
-                        WatchRecording(journal: journal, id: entry.id, note: entry.note)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.title).lineLimit(1)
-                            Text(entry.cloudUploadedAt != nil && entry.localEvictedAt != nil ? "已存云端，等待手机分析" :
-                                    (entry.isPlayable ? durationText(entry.duration) : "文件无法播放"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if entry.isPlayable, entry.storage == .phone {
-                                Text("等待 iPhone 保存").font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
             }
             Toggle("记录会议地点", isOn: Binding(get: { journal.collectLocation }, set: journal.setCollectLocation))
         }
-        .navigationTitle("录音与健康")
+        .navigationTitle("录音设置")
     }
 }
 
@@ -314,13 +350,17 @@ private struct WatchRecording: View {
 
     var body: some View {
         List {
-            if let entry = journal.recordings.first(where: { $0.id == id }) {
+            if let entry = journal.recordings.first(where: { $0.id == id }) ??
+                journal.recentReviewEntries.first(where: { $0.id == id }) {
+                let audio = journal.store.sourceAudio(entry)
+                if journal.watchMinutes[id] != nil {
+                    NavigationLink("查看纪要与来源") { WatchReview(journal: journal, id: id) }
+                }
                 Section {
-                    Text(entry.startedAt.formatted(date: .abbreviated, time: .shortened))
+                    Text(JournalDayKey(recording: entry).recordingTime(entry.startedAt, includeDate: true))
                         .font(.footnote)
-                    if entry.isPlayable {
-                        LabeledContent("时长", value: durationText(entry.duration))
-                    }
+                    LabeledContent("时长", value: durationText(entry.duration))
+                    Text(watchAudioStatus(entry, store: journal.store)).font(.caption2).foregroundStyle(.secondary)
                     if entry.state == .interrupted {
                         Text("录音中断，已保存可播放部分。").font(.footnote)
                     }
@@ -331,29 +371,31 @@ private struct WatchRecording: View {
                         Text(continuation.detail).font(.footnote)
                     }
                 }
-                if !(entry.markers ?? []).isEmpty {
+                if let url = audio.url, !(entry.markers ?? []).isEmpty {
                     Section("时间点标记") {
                         ForEach(entry.markers ?? []) { marker in
                             Button("\(marker.label) · \(durationText(marker.offset))") {
-                                do { try playback.play(journal.store.audio(id), startingAt: marker.offset) }
+                                do { try playback.play(url, startingAt: marker.offset) }
                                 catch { journal.message = error.localizedDescription }
                             }
-                            .disabled(!entry.isPlayable || journal.current != nil || journal.starting || journal.recovery.pending != nil)
+                            .disabled(journal.current != nil || journal.starting || journal.recovery.pending != nil)
                         }
                     }
                 }
-                Section("备注") {
-                    TextField("添加备注", text: $note)
-                    if note != entry.note {
-                        Button("保存备注") { journal.saveNote(note, for: entry) }
+                if entry.rawDeletedAt == nil && !(entry.storage == .phone && entry.localEvictedAt != nil) {
+                    Section("备注") {
+                        TextField("添加备注", text: $note)
+                        if note != entry.note {
+                            Button("保存备注") { journal.saveNote(note, for: entry) }
+                        }
                     }
                 }
-                if entry.isPlayable {
+                if let url = audio.url {
                     Button {
                         if playback.playing {
                             playback.stop()
                         } else {
-                            do { try playback.play(journal.store.audio(id)) }
+                            do { try playback.play(url) }
                             catch { journal.message = error.localizedDescription }
                         }
                     } label: {
@@ -365,13 +407,15 @@ private struct WatchRecording: View {
                         Label("发送到 iPhone", systemImage: "iphone.and.arrow.forward")
                     }
                 }
-                Button("删除录音", role: .destructive) {
-                    confirmingDelete = true
-                }
-                .confirmationDialog("删除这段手表录音？", isPresented: $confirmingDelete) {
-                    Button("删除", role: .destructive) {
-                        playback.stop()
-                        if journal.delete(entry) { dismiss() }
+                if entry.rawDeletedAt == nil && !(entry.storage == .phone && entry.localEvictedAt != nil) {
+                    Button("删除录音", role: .destructive) {
+                        confirmingDelete = true
+                    }
+                    .confirmationDialog("删除这段手表录音？", isPresented: $confirmingDelete) {
+                        Button("删除", role: .destructive) {
+                            playback.stop()
+                            if journal.delete(entry) { dismiss() }
+                        }
                     }
                 }
             }

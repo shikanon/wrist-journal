@@ -10,8 +10,13 @@ final class WatchUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 8))
 
         app.buttons["录音与健康"].tap()
+        XCTAssertTrue(app.staticTexts["暂无录音"].waitForExistence(timeout: 5))
         for _ in 0..<4 where !app.staticTexts["健康报告"].exists { app.swipeUp() }
         XCTAssertTrue(app.staticTexts["健康报告"].waitForExistence(timeout: 5))
+        let settings = app.staticTexts["录音设置"]
+        for _ in 0..<3 where !settings.isHittable { app.swipeUp() }
+        settings.tap()
+        XCTAssertTrue(app.switches["开始后立即锁定"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
         XCTAssertTrue(start.waitForExistence(timeout: 8))

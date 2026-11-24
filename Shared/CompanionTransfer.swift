@@ -24,6 +24,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         case ready, sync(Set<UUID>, [UUID], Bool), received(UUID), purge([UUID]), process([UUID], String)
         #else
         case ready, cloudAvailable, purgeAcknowledged([UUID]), credentialReady(String)
+        case recordingImported(Date), syncFallback(UUID, queued: Bool)
         #endif
     }
 
@@ -261,7 +262,7 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         try session.updateApplicationContext(context)
     }
 
-    func syncRecordings(known: [UUID], purged: [UUID], endedOnly: Bool = false) throws -> Bool {
+    func syncRecordings(known: [UUID], purged: [UUID], endedOnly: Bool = false, requestID: UUID? = nil) throws -> Bool {
         let session = try watchSession()
         let request: [String: Any] = [Key.kind: Key.sync, "known": known.map(\.uuidString),
                                      "purged": purged.prefix(500).map(\.uuidString), "endedOnly": endedOnly]
@@ -269,10 +270,11 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
         if session.isReachable {
             session.sendMessage(request, replyHandler: { _ in }, errorHandler: { [weak self] _ in
                 guard session.activationState == .activated else {
-                    self?.onEvent(.message(JournalError.watchUnavailable.localizedDescription))
+                    if let requestID { self?.onEvent(.syncFallback(requestID, queued: false)) }
                     return
                 }
                 self?.enqueueSync(request, session: session)
+                if let requestID { self?.onEvent(.syncFallback(requestID, queued: true)) }
             })
             return true
         }
@@ -366,12 +368,16 @@ final class CompanionTransfer: NSObject, WCSessionDelegate, @unchecked Sendable 
             case Key.recording:
                 guard let data = file.metadata?[Key.metadata] as? Data else { throw JournalError.invalidTransfer }
                 let recording = try JSONDecoder().decode(Recording.self, from: data)
-                try store.receive(file.fileURL, recording: recording)
+                let imported = try store.receive(file.fileURL, recording: recording)
                 if (try? store.recording(recording.id).rawDeletedAt) != nil, session.activationState == .activated {
                     session.transferUserInfo([Key.kind: Key.purge, "ids": [recording.id.uuidString]])
                 }
                 if session.activationState == .activated {
                     session.transferUserInfo([Key.kind: Key.receipt, "id": recording.id.uuidString])
+                }
+                if imported {
+                    onEvent(.recordingImported(.now))
+                    return
                 }
             case Key.report:
                 let report = try JSONDecoder().decode(HealthReport.self, from: Data(contentsOf: file.fileURL))

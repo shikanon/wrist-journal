@@ -53,7 +53,7 @@ struct Recording: Codable, Identifiable, Sendable {
     }
 
     var title: String {
-        note.isEmpty ? startedAt.formatted(date: .abbreviated, time: .shortened) : note
+        note.isEmpty ? JournalDayKey(recording: self).recordingTime(startedAt, includeDate: true) : note
     }
 }
 

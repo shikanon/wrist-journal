@@ -22,14 +22,10 @@ struct MeetingLocationView: View {
         let span = max(900, (accuracy ?? 0) * 4.5)
         let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: span, longitudinalMeters: span)
         return VStack(alignment: .leading, spacing: 8) {
-            if let accuracy {
-                Label("录音开始附近 · 约 \(accuracy.formatted(.number.precision(.fractionLength(0)))) 米范围",
-                      systemImage: "location.circle")
-                    .font(.subheadline)
-            } else {
-                Label("录音开始附近 · 大致位置", systemImage: "location.circle")
-                    .font(.subheadline)
-            }
+            Label(accuracy.map { "录音开始附近 · 约 \($0.formatted(.number.precision(.fractionLength(0)))) 米范围" }
+                  ?? "录音开始附近 · 大致位置", systemImage: "location.circle")
+                .font(.subheadline)
+                .accessibilityIdentifier("meeting-location.preview")
             // A preview inside a list should not compete for vertical scrolling.
             Map(initialPosition: .region(region), interactionModes: []) {
                 if let accuracy {
@@ -44,16 +40,6 @@ struct MeetingLocationView: View {
             .frame(height: 156)
             .clipShape(.rect(cornerRadius: 12))
             .accessibilityHidden(true)
-            if let url = mapsURL(for: coordinate) {
-                Link(destination: url) {
-                    Label("在 Apple 地图中打开", systemImage: "arrow.up.right")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(minHeight: 44)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityHint("查看录音开始附近的地图")
-                .accessibilityIdentifier("meeting-location.open-maps")
-            }
         }
         .padding(.vertical, 4)
     }
@@ -64,15 +50,4 @@ struct MeetingLocationView: View {
             .foregroundStyle(.secondary)
     }
 
-    private func mapsURL(for coordinate: CLLocationCoordinate2D) -> URL? {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "maps.apple.com"
-        components.path = "/"
-        components.queryItems = [
-            URLQueryItem(name: "ll", value: "\(coordinate.latitude),\(coordinate.longitude)"),
-            URLQueryItem(name: "q", value: "录音开始附近")
-        ]
-        return components.url
-    }
 }

@@ -49,6 +49,13 @@ enum CoreRegression {
         try check(dst.interval?.duration == 23 * 3600, "spring DST day")
         let fall = JournalDayKey(localDate: "2026-11-01", timeZoneIdentifier: "America/New_York")
         try check(fall.interval?.duration == 25 * 3600, "fall DST day")
+        let newYork = fall.calendar.timeZone
+        let repeatedHour = ISO8601DateFormatter().date(from: "2026-11-01T05:30:00Z")!
+        try check(JournalDayKey.utcOffset(at: repeatedHour, in: newYork) == "UTC−04:00" &&
+                  JournalDayKey.utcOffset(at: repeatedHour.addingTimeInterval(3600), in: newYork) == "UTC−05:00",
+                  "repeated fall hour displays distinct recording offsets")
+        try check(JournalDayKey.utcOffset(at: boundary, in: TimeZone(identifier: "Asia/Kolkata")!) == "UTC+05:30",
+                  "minute offsets survive travel display")
         try check(!JournalDayKey(date: .now, timeZone: "Asia/Shanghai").hasEnded(), "today is retained")
 
         let root = URL.temporaryDirectory.appendingPathComponent("WristJournalRegression-\(UUID().uuidString)")
@@ -59,7 +66,8 @@ enum CoreRegression {
         try store.save(recording)
         let source = root.appendingPathComponent("source.m4a")
         try Data(repeating: 7, count: 4096).write(to: source)
-        try store.receive(source, recording: recording)
+        try check(try store.receive(source, recording: recording), "metadata-only recording reports its first audio import")
+        try check(try !store.receive(source, recording: recording), "duplicate does not report a new audio import")
         let audio = try store.audio(recording.id)
         try check(FileManager.default.fileExists(atPath: audio.path), "audio imported")
         let day = JournalDayKey(recording: recording)
@@ -78,7 +86,7 @@ enum CoreRegression {
         try check(try store.purgeDaily(day) == [recording.id], "acknowledged cloud allows cleanup")
         try check(!FileManager.default.fileExists(atPath: audio.path), "raw audio removed")
         try check(try !store.recording(recording.id).isPlayable, "cleanup tombstone persisted")
-        try store.receive(source, recording: recording)
+        try check(try !store.receive(source, recording: recording), "purged receipt is not reported as an import")
         try check(!FileManager.default.fileExists(atPath: audio.path), "late duplicate cannot resurrect audio")
         try check(try store.dailyReports().first?.meetings.first?.minutes == "决定与待办", "minutes survive cleanup")
         let tombstoneURL = root.appendingPathComponent(recording.id.uuidString).appendingPathComponent("recording.json")
@@ -103,6 +111,11 @@ enum CoreRegression {
         try check(review.count == 1 && review[0].meetingCount == 1 && review[0].sedentaryEvents == 1 && review[0].activityEvents == 1,
                   "weekly summary counts saved insights")
         try check(JournalReview.grouped([report], monthly: true).first?.id == "2026-11", "monthly calendar grouping")
+        let newYearDay = JournalDayKey(localDate: "2026-12-31", timeZoneIdentifier: "Pacific/Auckland")
+        let newYearReport = DailyJournalReport(day: newYearDay, generatedAt: .now, meetings: [],
+            health: report.health, healthNote: nil, thresholds: settings, cloudBackupRequired: false)
+        try check(JournalReview.grouped([newYearReport], monthly: false).first?.title == "2026-12-28 至 2027-01-03",
+                  "weekly title uses full local week across year boundary")
         var duplicateHealth = report
         duplicateHealth.meetings = []
         let duplicatedReview = JournalReview(id: "travel", days: [report, duplicateHealth])
@@ -162,10 +175,13 @@ enum CoreRegression {
         let page2 = try store.list(offset: 20, limit: 20)
         try check(page1.count == 20 && page2.count == 20 &&
                   Set(page1.map(\.id)).isDisjoint(with: page2.map(\.id)), "history pagination has no duplicates")
+        let newArrival = Recording(id: UUID(), startedAt: start.addingTimeInterval(700), duration: 10, state: .saved)
+        try check(try store.receive(source, recording: newArrival) && store.list(limit: 50).count == 50,
+                  "an audio arrival is observable even at the paging limit")
         // An interrupted file/index commit is recovered from source files once.
         try Data([1]).write(to: root.appendingPathComponent(".catalog-dirty"))
         let recovered = JournalStore(root: root)
-        try check(try recovered.list().count == 57, "dirty catalog recovered from committed files")
+        try check(try recovered.list().count == 58, "dirty catalog recovered from committed files")
         try check(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".catalog-dirty").path),
                   "catalog recovery clears dirty marker")
         print("PASS: \(checks) core regression checks")

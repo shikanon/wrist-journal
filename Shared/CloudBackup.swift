@@ -71,8 +71,7 @@ actor CloudBackup {
                 }
                 let full = try await fetch(row.recordID, wifiOnly: wifiOnly)
                 guard let audio = (full["audio"] as? CKAsset)?.fileURL else { throw JournalError.invalidTransfer }
-                try store.receive(audio, recording: metadata)
-                imported += 1
+                if try store.receive(audio, recording: metadata) { imported += 1 }
             }
             cursor = page.cursor
         } while cursor != nil
