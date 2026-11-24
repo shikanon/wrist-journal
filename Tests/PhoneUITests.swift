@@ -5,6 +5,8 @@ final class PhoneUITests: XCTestCase {
     func testSyncAndAnalysisSettingsAreAvailable() {
         let app = XCUIApplication()
         app.launch()
+        XCTAssertTrue(app.navigationBars["日报"].waitForExistence(timeout: 8))
+        app.tabBars.buttons["录音"].tap()
         XCTAssertTrue(app.buttons["同步手表录音"].waitForExistence(timeout: 8))
 
         app.tabBars.buttons["设置"].tap()
@@ -39,19 +41,14 @@ final class PhoneUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-journal-fixture", "-journal-fixture-reset"]
         app.launch()
-        app.tabBars.buttons["回顾"].tap()
         let analyze = app.buttons["分析已结束日期"]
         XCTAssertTrue(analyze.waitForExistence(timeout: 8))
         analyze.tap()
         XCTAssertTrue(app.navigationBars["确认分析范围"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["1 个归档日 · 1 段"].exists)
         app.buttons["开始每日分析"].tap()
-        let done = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "已完成此次确认的录音整理")).firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 10))
-        // One saved day in the isolated fixture store.
-        let dayLink = app.cells.containing(.staticText, identifier: "1 段会议 · UTC+08:00").firstMatch
-        XCTAssertTrue(dayLink.exists)
-        dayLink.tap()
+        XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 10))
+        openMeetingSources(in: app)
         XCTAssertTrue(app.staticTexts["模拟纪要：确认差旅会议的行动项，下周跟进。"].waitForExistence(timeout: 5))
         assertMeetingMap(in: app)
         let event = app.staticTexts["心率与语音重合 · 未发现运动"]
@@ -69,11 +66,50 @@ final class PhoneUITests: XCTestCase {
         app.terminate()
         app.launchArguments = ["-journal-fixture"]
         app.launch()
-        app.tabBars.buttons["回顾"].tap()
+        app.navigationBars.buttons["历史日报"].tap()
         app.segmentedControls.buttons["每周"].tap()
         XCTAssertTrue(app.staticTexts["1 段 · 02:00"].exists)
         app.segmentedControls.buttons["每月"].tap()
         XCTAssertTrue(app.staticTexts["1 段 · 02:00"].exists)
+    }
+
+    @MainActor
+    private func openMeetingSources(in app: XCUIApplication) {
+        let sources = app.descendants(matching: .any)["daily-report.sources"].firstMatch
+        for _ in 0..<5 where !sources.isHittable { app.swipeUp() }
+        XCTAssertTrue(sources.isHittable)
+        sources.tap()
+    }
+
+    @MainActor
+    func testDailyReportEditorSavesAndDiscards() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-journal-fixture", "-journal-fixture-reset", "-journal-report-edition-simulation"]
+        app.launch()
+        let reportTitle = app.staticTexts["daily-report.title"]
+        XCTAssertTrue(app.staticTexts["编辑版：差旅与项目交接"].waitForExistence(timeout: 12))
+        let edit = app.buttons["编辑日报"]
+        XCTAssertTrue(edit.isHittable)
+        edit.tap()
+        let title = app.textFields["daily-report.editor.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("1")
+        app.buttons["保存"].tap()
+        let expected = "编辑版：差旅与项目交接1"
+        XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5))
+
+        edit.tap()
+        title.tap()
+        title.typeText("2")
+        app.buttons["取消"].tap()
+        app.alerts.buttons["放弃更改"].tap()
+        XCTAssertEqual(reportTitle.label, expected)
+
+        app.terminate()
+        app.launchArguments = ["-journal-fixture"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 6))
     }
 
     @MainActor
@@ -103,10 +139,12 @@ final class PhoneUITests: XCTestCase {
         let backup = app.switches["云端备份原始录音"]
         XCTAssertTrue(backup.exists)
         backup.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
-        app.tabBars.buttons["回顾"].tap()
+        app.tabBars.buttons["日报"].tap()
         app.buttons["分析已结束日期"].tap()
         app.buttons["开始每日分析"].tap()
         let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "云备份未完成")).firstMatch
+        XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 10))
+        for _ in 0..<5 where !failed.isHittable { app.swipeUp() }
         XCTAssertTrue(failed.waitForExistence(timeout: 10))
         app.tabBars.buttons["录音"].tap()
         XCTAssertFalse(app.staticTexts["原音已清理 · 纪要在回顾中保留"].exists)

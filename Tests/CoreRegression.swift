@@ -79,6 +79,9 @@ enum CoreRegression {
             healthNote: nil, thresholds: settings, cloudBackupRequired: true)
         do { _ = try store.purgeDaily(day); fatalError("Uncommitted report cleaned audio") } catch { checks += 1 }
         try store.saveDaily(report)
+        let edition = DailyReportEdition(narrative: DailyReportNarrative(title: "我核对的标题", markdown: "## 待办\n- **确认行程**"),
+            photos: [.init(jpeg: Data([1, 2, 3]), caption: "自选图片")], meetingIDs: report.meetingIDs)
+        try store.saveDailyEdition(edition, for: day)
         try check(try store.purgeDaily(day).isEmpty, "failed cloud backup prevents cleanup")
         try check(FileManager.default.fileExists(atPath: audio.path), "backup failure retains file")
         report.backedUpRecordingIDs = [recording.id]
@@ -103,6 +106,17 @@ enum CoreRegression {
         try check(try store.pendingPurgeIDs().contains(recording.id), "purge stays pending before watch acknowledgement")
         try store.acknowledgePurge([recording.id])
         let reopened = JournalStore(root: root)
+        try check(try reopened.dailyEdition(day) == edition, "editable text and attachment survive report rebuild and audio cleanup")
+        let anotherZone = JournalDayKey(localDate: day.localDate, timeZoneIdentifier: "Pacific/Auckland")
+        try check(try reopened.dailyEdition(anotherZone) == nil, "editions do not collide on travels across time zones")
+        var invalidEdition = edition
+        invalidEdition.narrative.title = " \n "
+        do {
+            try store.saveDailyEdition(invalidEdition, for: day)
+            fatalError("Blank title replaced the saved edition")
+        } catch { try check(try reopened.dailyEdition(day) == edition, "invalid edit does not replace the saved edition") }
+        try check(report.narrative.markdown.contains("决定与待办") && report.meetingHours.map(\.duration) == [120],
+            "legacy minutes produce useful highlights and real meeting duration on the home report")
         try check(try reopened.pendingPurgeIDs().isEmpty, "acknowledgement survives restart")
         try check(try reopened.pendingDays().isEmpty, "restart only restores unfinished days")
         try store.receive(source, recording: recording)
@@ -114,6 +128,8 @@ enum CoreRegression {
         let newYearDay = JournalDayKey(localDate: "2026-12-31", timeZoneIdentifier: "Pacific/Auckland")
         let newYearReport = DailyJournalReport(day: newYearDay, generatedAt: .now, meetings: [],
             health: report.health, healthNote: nil, thresholds: settings, cloudBackupRequired: false)
+        try check(DailyJournalReport.preferred(in: [newYearReport, report])?.id == report.id,
+            "a newer health-only day does not obscure the last meeting report")
         try check(JournalReview.grouped([newYearReport], monthly: false).first?.title == "2026-12-28 至 2027-01-03",
                   "weekly title uses full local week across year boundary")
         var duplicateHealth = report

@@ -14,6 +14,7 @@ final class PhoneJournal: ObservableObject {
     @Published private(set) var hasPersonalKey = ArkCredential.personal.load() != nil
     @Published private(set) var hasOfficialKey = false
     @Published var days: [DailyJournalReport] = []
+    @Published private(set) var dailyEditionRevision = UUID()
     @Published var processingDays = false
     @Published var dailyStatus: String?
     @Published var dailyIssues: [DailyAnalysisIssue: [String]] = [:]
@@ -104,6 +105,32 @@ final class PhoneJournal: ObservableObject {
         dailyStatus = "已请求 Watch 处理，录音和结果会在设备可用时同步。"
     }
     var hasAnalysisWorker: Bool { worker != nil }
+
+    func saveDailyEdition(_ edition: DailyReportEdition, for day: JournalDayKey) throws {
+        try store.saveDailyEdition(edition, for: day)
+        dailyEditionRevision = UUID()
+    }
+
+    func draftDailyReport(_ report: DailyJournalReport) async throws -> DailyReportNarrative {
+        try requirePhoneProcessing()
+        let generation = processingGeneration
+        let notes = report.meetings.sorted { $0.startedAt < $1.startedAt }.map(\.minutes)
+        guard notes.count >= 2 else { throw AnalysisError.invalidResponse }
+        let key: String
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-report-edition-simulation") {
+            key = "fixture-key"
+        } else if let configured = credential.load() { key = configured }
+        else { throw AnalysisError.missingCredential }
+        #else
+        guard let configured = credential.load() else { throw AnalysisError.missingCredential }
+        key = configured
+        #endif
+        let result = try await analyzer.draftDailyReport(notes: notes, model: processingConfiguration.model, key: key)
+        try Task.checkCancellation()
+        guard generation == processingGeneration else { throw CancellationError() }
+        return result
+    }
 
     func foregroundEntered() {
         #if DEBUG

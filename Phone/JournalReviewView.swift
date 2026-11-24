@@ -3,7 +3,6 @@ import SwiftUI
 struct JournalReviewView: View {
     @ObservedObject var journal: PhoneJournal
     @State private var period = 0
-    @State private var preview: DailyAnalysisPreview?
 
     var body: some View {
         #if DEBUG
@@ -27,32 +26,8 @@ struct JournalReviewView: View {
                     Text("每周").tag(1)
                     Text("每月").tag(2)
                 }.pickerStyle(.segmented)
-                Button(journal.processingMode == .watch ? "请求 Watch 处理并归档" : "分析已结束日期") {
-                    do { preview = try journal.analysisPreview() }
-                    catch { journal.message = "无法读取待分析录音：\(error.localizedDescription)" }
-                }
-                .disabled(journal.processingMode == .none || journal.processingDays || journal.hasAnalysisWorker || journal.readingHealth)
-                if journal.processingMode == .none {
-                    Text("当前不处理，原音保留。请在设置中打开 Mac 临时下载。").font(.footnote)
-                }
-                if journal.processingDays { ProgressView("正在分析，已完成分段会保存进度") }
-                if let status = journal.dailyStatus { Text(status).font(.footnote).foregroundStyle(.secondary) }
             } footer: {
                 Text("按录音开始时的当地日期归档。今日暂不清理；周和月回顾复用日报。")
-            }
-            ForEach(DailyAnalysisIssue.allCases) { issue in
-                if let details = journal.dailyIssues[issue], !journal.processingDays {
-                    DisclosureGroup {
-                        ForEach(Array(details.enumerated()), id: \.offset) { _, detail in
-                            Text(detail).font(.footnote).foregroundStyle(.secondary)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(issue.title) · \(details.count) 个归档日")
-                            Text(issue.nextStep).font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                }
             }
             if journal.hasMoreDays {
                 Section {
@@ -66,7 +41,7 @@ struct JournalReviewView: View {
             } else if period == 0 {
                 ForEach(journal.days) { day in
                     NavigationLink {
-                        DailyReportView(journal: journal, report: day)
+                        ArchivedDailyReportView(journal: journal, original: day)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(day.day.localDate)
@@ -90,20 +65,14 @@ struct JournalReviewView: View {
                         LabeledContent("伴随运动的重合", value: "\(review.activityEvents) 次")
                         ForEach(review.days) { day in
                             NavigationLink(day.day.localDate + " · " + dayLabel(day)) {
-                                DailyReportView(journal: journal, report: day)
+                                ArchivedDailyReportView(journal: journal, original: day)
                             }
                         }
                     }
                 }
             }
         }
-        .navigationTitle("回顾")
-        .sheet(item: $preview) { scope in
-            DailyAnalysisConfirmation(scope: scope) {
-                preview = nil
-                Task { _ = await journal.processDays(automatic: false, preview: scope) }
-            }
-        }
+        .navigationTitle("历史日报")
     }
 
     private func dayLabel(_ report: DailyJournalReport) -> String {
@@ -115,7 +84,38 @@ struct JournalReviewView: View {
     }
 }
 
-private struct DailyAnalysisConfirmation: View {
+struct ReportAnalysisSection: View {
+    @ObservedObject var journal: PhoneJournal
+    let onRequest: () -> Void
+
+    var body: some View {
+        Section("生成日报") {
+            Button(journal.processingMode == .watch ? "请求 Watch 处理并归档" : "分析已结束日期", action: onRequest)
+            .disabled(journal.processingMode == .none || journal.processingDays || journal.hasAnalysisWorker || journal.readingHealth)
+            if journal.processingMode == .none {
+                Text("当前不处理，原音保留。请在设置中打开 Mac 临时下载。").font(.footnote)
+            }
+            if journal.processingDays { ProgressView("正在分析，已完成分段会保存进度") }
+            if let status = journal.dailyStatus { Text(status).font(.footnote).foregroundStyle(.secondary) }
+            ForEach(DailyAnalysisIssue.allCases) { issue in
+                if let details = journal.dailyIssues[issue], !journal.processingDays {
+                    DisclosureGroup {
+                        ForEach(Array(details.enumerated()), id: \.offset) { _, detail in
+                            Text(detail).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(issue.title) · \(details.count) 个归档日")
+                            Text(issue.nextStep).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DailyAnalysisConfirmation: View {
     @Environment(\.dismiss) private var dismiss
     let scope: DailyAnalysisPreview
     let confirm: () -> Void
@@ -200,7 +200,7 @@ private struct SourceReviewPreview: View {
 }
 #endif
 
-private struct DailyReportView: View {
+struct DailyReportView: View {
     @ObservedObject var journal: PhoneJournal
     @StateObject private var playback = LocalPlayback()
     let report: DailyJournalReport

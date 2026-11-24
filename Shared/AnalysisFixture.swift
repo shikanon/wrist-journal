@@ -26,8 +26,16 @@ actor AnalysisFixture {
                   let bytes = Data(base64Encoded: raw), !bytes.isEmpty else { throw JournalError.invalidTransfer }
             audioBytes += bytes.count
         }
-        let text = audio == nil ? "Watch 纪要：确认行动项，下周跟进。" :
-            #"{"minutes":"已讨论行动项","energeticSpeech":[{"startSeconds":1,"endSeconds":2,"evidence":"语速加快"}],"transcript":[{"startSeconds":1,"endSeconds":2,"text":"我们下周再跟进行动项。"}],"highlights":[{"statement":"下周跟进行动项","transcriptIndex":0}]}"#
+        let text: String
+        if ProcessInfo.processInfo.arguments.contains("-journal-report-edition-simulation") {
+            guard audio == nil, content.count == 1, let prompt = content.first?["text"] as? String,
+                  prompt.contains("会议 1"), prompt.contains("会议 2"), !prompt.contains("私有图片说明"),
+                  !prompt.contains("编辑版：差旅与项目交接") else { throw JournalError.invalidTransfer }
+            text = "# 差旅与项目交接\n\n## 当日进展\n- 团队确认出行计划。\n\n## 待办\n- **下周跟进**交接事项。"
+        } else {
+            text = audio == nil ? "Watch 纪要：确认行动项，下周跟进。" :
+                #"{"minutes":"已讨论行动项","energeticSpeech":[{"startSeconds":1,"endSeconds":2,"evidence":"语速加快"}],"transcript":[{"startSeconds":1,"endSeconds":2,"text":"我们下周再跟进行动项。"}],"highlights":[{"statement":"下周跟进行动项","transcriptIndex":0}]}"#
+        }
         return (try JSONSerialization.data(withJSONObject: [
             "choices": [["finish_reason": "stop", "message": ["content": text]]]
         ]), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)

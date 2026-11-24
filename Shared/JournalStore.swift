@@ -367,9 +367,25 @@ struct JournalStore {
             if complete { $0.unfinishedAnalysis.remove(id) } else { $0.unfinishedAnalysis.insert(id) }
         }
     }
-    private func dailyURL(_ day: JournalDayKey) throws -> URL {
+    private func dailyFile(_ day: JournalDayKey, in folder: String) throws -> URL {
         let name = Data(day.id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
-        return try directory("Daily").appendingPathComponent(name).appendingPathExtension("json")
+        return try directory(folder).appendingPathComponent(name).appendingPathExtension("json")
+    }
+    private func dailyURL(_ day: JournalDayKey) throws -> URL { try dailyFile(day, in: "Daily") }
+
+    func dailyEdition(_ day: JournalDayKey) throws -> DailyReportEdition? {
+        let url = try dailyFile(day, in: "DailyEditions")
+        guard files.fileExists(atPath: url.path) else { return nil }
+        let edition = try JSONDecoder().decode(DailyReportEdition.self, from: Data(contentsOf: url))
+        guard edition.isValid else { throw CocoaError(.fileReadCorruptFile) }
+        return edition
+    }
+
+    func saveDailyEdition(_ edition: DailyReportEdition, for day: JournalDayKey) throws {
+        try state.lock.withLock {
+            guard edition.isValid, try daily(day) != nil else { throw CocoaError(.fileWriteInvalidFileName) }
+            try JSONEncoder().encode(edition).write(to: dailyFile(day, in: "DailyEditions"), options: .atomic)
+        }
     }
     func daily(_ day: JournalDayKey) throws -> DailyJournalReport? {
         let url = try dailyURL(day)

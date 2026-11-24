@@ -16,23 +16,21 @@ struct WristJournalPhone: App {
         AnalysisScheduling.schedule(settings: journal.dailySettings)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-journal-storage-simulation") { _tab = State(initialValue: 3) }
-        if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") ||
-            ProcessInfo.processInfo.arguments.contains("-journal-sources-preview") ||
-            ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { _tab = State(initialValue: 2) }
+        if ProcessInfo.processInfo.arguments.contains("-journal-map-preview-detail") { _tab = State(initialValue: 2) }
         #endif
     }
 
     var body: some Scene {
         WindowGroup {
             TabView(selection: $tab) {
-                NavigationStack { recordingsRoot }
-                    .tabItem { Label("录音", systemImage: "waveform") }
+                NavigationStack { DailyReportHome(journal: journal, openRecordings: { tab = 2 }) }
+                    .tabItem { Label("日报", systemImage: "doc.text") }
                     .tag(0)
                 NavigationStack { PhoneHealth(journal: journal) }
                     .tabItem { Label("健康", systemImage: "heart.text.clipboard") }
                     .tag(1)
-                NavigationStack { JournalReviewView(journal: journal) }
-                    .tabItem { Label("回顾", systemImage: "calendar") }
+                NavigationStack { recordingsRoot }
+                    .tabItem { Label("录音", systemImage: "waveform") }
                     .tag(2)
                 NavigationStack { JournalSettings(journal: journal) }
                     .tabItem { Label("设置", systemImage: "gearshape") }
@@ -47,6 +45,8 @@ struct WristJournalPhone: App {
                 if ProcessInfo.processInfo.arguments.contains("-journal-power-simulation") { await journal.runPowerSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-simulation-run") { await journal.runSimulation() }
                 if ProcessInfo.processInfo.arguments.contains("-journal-fixture-verify-restart") { journal.verifySimulationPersistence() }
+                if ProcessInfo.processInfo.arguments.contains("-journal-report-edition-simulation") { await journal.runDailyReportEditionSimulation() }
+                if ProcessInfo.processInfo.arguments.contains("-journal-report-edition-verify") { journal.verifyDailyReportEditionSimulation() }
                 #endif
                 journal.foregroundEntered()
             }
