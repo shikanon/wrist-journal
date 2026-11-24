@@ -283,7 +283,9 @@ final class PhoneJournal: ObservableObject {
         let start = Calendar.current.startOfDay(for: .now).addingTimeInterval(-36 * 3600)
         var entry = Recording(id: UUID(), startedAt: start, duration: 120, state: .saved, note: "差旅模拟会议")
         entry.timeZoneIdentifier = "Asia/Shanghai"
-        entry.location = MeetingLocation(latitude: 31.230, longitude: 121.474, accuracy: 150, capturedAt: start)
+        if !ProcessInfo.processInfo.arguments.contains("-journal-map-preview-no-location") {
+            entry.location = MeetingLocation(latitude: 31.230, longitude: 121.474, accuracy: 150, capturedAt: start)
+        }
         try store.save(entry)
         try Data(repeating: 0, count: 4096).write(to: store.audio(entry.id))
         var job = MeetingAnalysisJob(model: "simulation", credential: "personal", includeContext: false)

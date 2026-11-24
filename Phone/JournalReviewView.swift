@@ -9,6 +9,10 @@ struct JournalReviewView: View {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-journal-sources-preview") {
             SourceReviewPreview(journal: journal)
+        } else if ProcessInfo.processInfo.arguments.contains("-journal-fixture"),
+                  ProcessInfo.processInfo.arguments.contains("-journal-map-preview-report"),
+                  let firstMeetingDay = journal.days.first(where: { !$0.meetings.isEmpty }) {
+            DailyReportView(journal: journal, report: firstMeetingDay)
         } else { content }
         #else
         content
@@ -125,16 +129,6 @@ private struct DailyReportView: View {
     let report: DailyJournalReport
     var body: some View {
         List {
-            Section("当日健康") {
-                Text("健康统计时区：\(report.healthTimeZoneIdentifier ?? report.day.timeZoneIdentifier)")
-                    .font(.footnote).foregroundStyle(.secondary)
-                ForEach(HealthMetric.allCases) { metric in
-                    LabeledContent(metric.title, value: report.health.metrics[metric].map {
-                        "\(metric.display($0.value)) \(metric.unit)"
-                    } ?? "无数据")
-                }
-                if let note = report.healthNote { Text(note).font(.footnote).foregroundStyle(.secondary) }
-            }
             ForEach(report.meetings) { meeting in
                 Section(meeting.title) {
                     Text(meeting.startedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened,
@@ -143,16 +137,8 @@ private struct DailyReportView: View {
                     if let continuation = meeting.continuation {
                         Text(continuation.detail).font(.footnote).foregroundStyle(.orange)
                     }
-                    if let location = meeting.location {
-                        Text("会议地点（粗略）：\(location.description)")
-                        if let accuracy = location.accuracy {
-                            Text("定位精度约 \(Int(accuracy)) 米").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if let url = URL(string: "https://maps.apple.com/?ll=\(location.latitude),\(location.longitude)") {
-                            Link("在地图查看", destination: url)
-                        }
-                    } else { Text("未记录地点").font(.caption).foregroundStyle(.secondary) }
                     Text(meeting.minutes).textSelection(.enabled)
+                    MeetingLocationView(location: meeting.location)
                     ShareLink(item: meeting.shareText) { Label("分享纪要与来源", systemImage: "square.and.arrow.up") }
                     RecordingSourcesView(store: journal.store, recordingID: meeting.id,
                         citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback)
@@ -167,12 +153,24 @@ private struct DailyReportView: View {
                     if let note = meeting.healthNote { Text(note).font(.footnote).foregroundStyle(.secondary) }
                 }
             }
+            Section("当日健康") {
+                Text("健康统计时区：\(report.healthTimeZoneIdentifier ?? report.day.timeZoneIdentifier)")
+                    .font(.footnote).foregroundStyle(.secondary)
+                ForEach(HealthMetric.allCases) { metric in
+                    LabeledContent(metric.title, value: report.health.metrics[metric].map {
+                        "\(metric.display($0.value)) \(metric.unit)"
+                    } ?? "无数据")
+                }
+                if let note = report.healthNote { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            }
             Section {
                 Text("录音可能包含其他发言者，语音线索不一定来自佩戴者本人。与心率变化的时间重合不证明因果，也不等于疾病诊断。HealthKit 采样和同步可能不完整。")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text(report.cleanupCompletedAt != nil ? "原音清理已完成。" : report.retainsAudio == true ? "已按设置保留原音；本机有音频时可回听来源。" :
-                    (report.canPurge ? "日报已保存，等待完成原音清理。" : "等待备份完成，原音保留。"))
-                    .font(.footnote)
+                if !report.meetings.isEmpty {
+                    Text(report.cleanupCompletedAt != nil ? "原音清理已完成。" : report.retainsAudio == true ? "已按设置保留原音；本机有音频时可回听来源。" :
+                        (report.canPurge ? "日报已保存，等待完成原音清理。" : "等待备份完成，原音保留。"))
+                        .font(.footnote)
+                }
             }
         }.navigationTitle(report.day.localDate)
             .onDisappear { playback.stop() }
@@ -194,13 +192,15 @@ struct RecordingSourcesView: View {
             if !markers.isEmpty {
                 Text("时间点标记").font(.headline)
                 ForEach(markers) { marker in
-                    Button {
-                        play(at: marker.offset)
-                    } label: {
-                        Label("\(marker.label) · \(durationText(marker.offset))", systemImage: "bookmark")
+                    let label = "\(marker.label) · \(durationText(marker.offset))"
+                    if audio.url != nil {
+                        Button { play(at: marker.offset) } label: {
+                            Label(label, systemImage: "bookmark")
+                        }
+                        .accessibilityHint("回听此标记")
+                    } else {
+                        Label(label, systemImage: "bookmark").foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(audio.url == nil ? Color.secondary : Color.accentColor)
-                    .disabled(audio.url == nil)
                 }
             }
             Text("有来源的要点").font(.headline)
@@ -213,11 +213,15 @@ struct RecordingSourcesView: View {
                     Text(citation.statement).font(.subheadline.weight(.semibold)).textSelection(.enabled)
                     Text("转写原文（AI 识别）").font(.caption).foregroundStyle(.secondary)
                     Text("「\(citation.quote)」").textSelection(.enabled)
-                    Button { play(at: max(0, citation.startSeconds - 1)) } label: {
-                        Label("回听约 \(citation.timeRange)", systemImage: "play.circle")
+                    if audio.url != nil {
+                        Button { play(at: max(0, citation.startSeconds - 1)) } label: {
+                            Label("回听约 \(citation.timeRange)", systemImage: "play.circle")
+                        }
+                    } else {
+                        Label("原音约 \(citation.timeRange)", systemImage: "clock")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(audio.url == nil ? Color.secondary : Color.accentColor)
-                    .disabled(audio.url == nil)
                     ShareLink(item: citation.shareText) { Label("分享此来源", systemImage: "square.and.arrow.up") }
                         .font(.footnote)
                 }
@@ -226,10 +230,10 @@ struct RecordingSourcesView: View {
             if !citations.isEmpty || !markers.isEmpty {
                 Text(audio.detail).font(.footnote).foregroundStyle(.secondary)
                 if !citations.isEmpty {
-                    Text("转写可能有误；可从引用前 1 秒回听核对。")
+                    Text(audio.url == nil ? "转写和时间为 AI 估计。" : "转写和时间为 AI 估计，可从引用前 1 秒回听核对。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if playback.playing { Button("停止回听") { playback.stop() } }
+                if audio.url != nil, playback.playing { Button("停止回听") { playback.stop() } }
             }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }

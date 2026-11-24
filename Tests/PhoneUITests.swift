@@ -12,7 +12,7 @@ final class PhoneUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["API Key 来源"].exists)
         XCTAssertTrue(app.secureTextFields["输入个人 API Key"].exists)
 
-        let context = app.switches["分析时使用会议背景"]
+        let context = app.switches["分析时附加心率汇总"]
         app.swipeUp()
         XCTAssertTrue(context.exists)
         let updated = (context.value as? String) == "1" ? "0" : "1"
@@ -39,22 +39,26 @@ final class PhoneUITests: XCTestCase {
         XCTAssertTrue(analyze.waitForExistence(timeout: 8))
         analyze.tap()
         app.buttons["开始每日分析"].tap()
-        let done = app.staticTexts["已完成结束日期的分析；日报、纪要和地点已保留。"]
+        let done = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "已完成手机已收到的结束日期录音")).firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 10))
         // One saved day in the isolated fixture store.
         let dayLink = app.cells.containing(.staticText, identifier: "1 段会议 · Asia/Shanghai").firstMatch
         XCTAssertTrue(dayLink.exists)
         dayLink.tap()
-        app.swipeUp()
-        XCTAssertTrue(app.staticTexts["会议地点（粗略）：31.230, 121.474"].exists)
-        XCTAssertTrue(app.staticTexts["模拟纪要：确认差旅会议的行动项，下周跟进。"].exists)
-        app.swipeUp()
-        XCTAssertTrue(app.staticTexts["心率与语音重合 · 未发现运动"].exists)
+        XCTAssertTrue(app.staticTexts["模拟纪要：确认差旅会议的行动项，下周跟进。"].waitForExistence(timeout: 5))
+        assertMeetingMap(in: app)
+        let event = app.staticTexts["心率与语音重合 · 未发现运动"]
+        for _ in 0..<4 {
+            if event.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(event.isHittable)
         app.tabBars.buttons["录音"].tap()
         XCTAssertTrue(app.staticTexts["原音已清理 · 纪要在回顾中保留"].exists)
         app.cells.containing(.staticText, identifier: "差旅模拟会议").firstMatch.tap()
         XCTAssertFalse(app.buttons["播放"].exists)
         XCTAssertFalse(app.buttons["导出 M4A"].exists)
+        assertMeetingMap(in: app)
         app.terminate()
         app.launchArguments = ["-journal-fixture"]
         app.launch()
@@ -63,6 +67,18 @@ final class PhoneUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["1 段 · 02:00"].exists)
         app.segmentedControls.buttons["每月"].tap()
         XCTAssertTrue(app.staticTexts["1 段 · 02:00"].exists)
+    }
+
+    @MainActor
+    private func assertMeetingMap(in app: XCUIApplication) {
+        let openMap = app.descendants(matching: .any).matching(identifier: "meeting-location.open-maps").firstMatch
+        for _ in 0..<4 {
+            if openMap.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(openMap.isHittable)
+        XCTAssertTrue(app.staticTexts["录音开始附近 · 约 150 米范围"].exists)
+        XCTAssertFalse(app.staticTexts["会议地点（粗略）：31.230, 121.474"].exists)
     }
 
     @MainActor

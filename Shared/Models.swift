@@ -102,10 +102,6 @@ struct MeetingLocation: Codable, Sendable {
     let longitude: Double
     var accuracy: Double?
     var capturedAt: Date?
-
-    var description: String {
-        String(format: "%.3f, %.3f", latitude, longitude)
-    }
 }
 
 enum HealthMetric: String, Codable, CaseIterable, Identifiable, Sendable {

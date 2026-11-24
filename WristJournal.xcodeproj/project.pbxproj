@@ -6,6 +6,8 @@
 	};
 	objectVersion = 56;
 	objects = {
+		F10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLocationView.swift; sourceTree = "<group>"; };
+		F10000000000000000000002 = { isa = PBXBuildFile; fileRef = F10000000000000000000001; };
 		E10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingExperience.swift; sourceTree = "<group>"; };
 		E10000000000000000000002 = { isa = PBXBuildFile; fileRef = E10000000000000000000001; };
 		E10000000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingScreen.swift; sourceTree = "<group>"; };
@@ -331,6 +333,7 @@
 			path = Phone;
 			sourceTree = "<group>";
 			children = (
+				F10000000000000000000001,
 				D1000000000000000000000B,
 				C10000000000000000000007,
 				C1000000000000000000000F,
@@ -633,6 +636,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F10000000000000000000002,
 				D10000000000000000000009,
 				D1000000000000000000000C,
 				D10000000000000000000002,

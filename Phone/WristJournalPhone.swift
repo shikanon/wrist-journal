@@ -25,7 +25,7 @@ struct WristJournalPhone: App {
     var body: some Scene {
         WindowGroup {
             TabView(selection: $tab) {
-                NavigationStack { PhoneRecordings(journal: journal) }
+                NavigationStack { recordingsRoot }
                     .tabItem { Label("录音", systemImage: "waveform") }
                     .tag(0)
                 NavigationStack { PhoneHealth(journal: journal) }
@@ -57,6 +57,21 @@ struct WristJournalPhone: App {
                 if phase == .background { journal.foregroundExited() }
             }
         }
+    }
+
+    @ViewBuilder
+    private var recordingsRoot: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-journal-fixture"),
+           ProcessInfo.processInfo.arguments.contains("-journal-map-preview-detail"),
+           let entry = journal.recordings.first {
+            PhoneRecording(journal: journal, id: entry.id)
+        } else {
+            PhoneRecordings(journal: journal)
+        }
+        #else
+        PhoneRecordings(journal: journal)
+        #endif
     }
 }
 
@@ -139,6 +154,7 @@ private struct PhoneRecording: View {
     var body: some View {
         List {
             if let entry = journal.recordings.first(where: { $0.id == id }) {
+                let audio = journal.store.sourceAudio(id)
                 Section {
                     Text(entry.startedAt.formatted(date: .long, time: .shortened))
                     if entry.state == .interrupted {
@@ -153,47 +169,52 @@ private struct PhoneRecording: View {
                         }
                     }
                     if !entry.note.isEmpty { Text(entry.note).textSelection(.enabled) }
-                    if let location = entry.location {
-                        Text("会议地点（粗略）：\(location.description)").textSelection(.enabled)
-                    }
                     if let zone = entry.timeZoneIdentifier { Text(zone).font(.caption).foregroundStyle(.secondary) }
                 }
-                if entry.isPlayable {
+                if let url = audio.url {
                     Section("播放") {
-                    VStack {
-                        Slider(value: $position, in: 0...entry.duration) { editing in
-                            scrubbing = editing
-                            if !editing { playback.seek(to: position) }
+                        VStack {
+                            Slider(value: $position, in: 0...max(0, entry.duration)) { editing in
+                                scrubbing = editing
+                                if !editing { playback.seek(to: position) }
+                            }
+                            .accessibilityLabel("播放位置")
+                            .accessibilityValue(durationText(position))
+                            HStack {
+                                Text(durationText(position))
+                                Spacer()
+                                Text(durationText(entry.duration)).foregroundStyle(.secondary)
+                            }
+                            .font(.caption.monospacedDigit())
                         }
-                        .accessibilityLabel("播放位置")
-                        .accessibilityValue(durationText(position))
-                        HStack {
-                            Text(durationText(position))
-                            Spacer()
-                            Text(durationText(entry.duration)).foregroundStyle(.secondary)
+                        Button {
+                            if playback.playing {
+                                position = playback.position
+                                playback.stop()
+                            } else {
+                                if position >= entry.duration { position = 0 }
+                                do { try playback.play(url, startingAt: position) }
+                                catch { journal.message = error.localizedDescription }
+                            }
+                        } label: {
+                            Label(playback.playing ? "暂停" : "播放", systemImage: playback.playing ? "pause.fill" : "play.fill")
                         }
-                        .font(.caption.monospacedDigit())
                     }
-                    Button {
-                        if playback.playing {
-                            position = playback.position
-                            playback.stop()
+                    ShareLink(item: url) { Label("导出 M4A", systemImage: "square.and.arrow.up") }
+                } else {
+                    Section("原音") {
+                        if entry.state == .damaged {
+                            Label("录音文件不完整，无法播放。", systemImage: "exclamationmark.triangle")
                         } else {
-                            if position >= entry.duration { position = 0 }
-                            do { try playback.play(journal.store.audio(id), startingAt: position) }
-                            catch { journal.message = error.localizedDescription }
+                            Label(audio.detail, systemImage: "speaker.slash")
                         }
-                    } label: {
-                        Label(playback.playing ? "暂停" : "播放", systemImage: playback.playing ? "pause.fill" : "play.fill")
                     }
-                    }
-                    if let url = try? journal.store.audio(id) {
-                        ShareLink(item: url) { Label("导出 M4A", systemImage: "square.and.arrow.up") }
-                    }
-                } else if entry.rawDeletedAt != nil {
-                    Text("日报已保存，原音已按设置清理。会议纪要和地点可继续查看。").foregroundStyle(.secondary)
+                    .foregroundStyle(.secondary)
                 }
-                meetingAnalysis(entry)
+                Section("会议地点") {
+                    MeetingLocationView(location: entry.location)
+                }
+                meetingAnalysis(entry, hasLocalAudio: audio.url != nil)
                 if journal.jobs[id]?.state == .complete || !(entry.markers ?? []).isEmpty {
                     Section("标记与原文引用") {
                         RecordingSourcesView(store: journal.store, recordingID: id,
@@ -221,7 +242,7 @@ private struct PhoneRecording: View {
         .onDisappear { playback.stop() }
     }
 
-    private func meetingAnalysis(_ entry: Recording) -> some View {
+    private func meetingAnalysis(_ entry: Recording, hasLocalAudio: Bool) -> some View {
         Section("会议分析") {
             if let job = journal.jobs[id] {
                 switch job.state {
@@ -247,7 +268,8 @@ private struct PhoneRecording: View {
                     }
                 }
             }
-            if entry.isPlayable, journal.jobs[id]?.state != .queued, journal.processingMode != .none {
+            if entry.isPlayable, (hasLocalAudio || journal.processingMode == .watch),
+               journal.jobs[id]?.state != .queued, journal.processingMode != .none {
                 Button(journal.processingMode == .watch ? "在 Watch 上处理" :
                     (journal.jobs[id] == nil ? "分析录音" : "重新分析")) { confirmingAnalysis = true }
                     .disabled(journal.processingDays)
@@ -255,7 +277,7 @@ private struct PhoneRecording: View {
                         Button("开始分析") { Task { await journal.analyze(entry) } }
                     } message: {
                         Text(journal.includeContext
-                             ? "将分段上传这条录音，并使用可用的会议时段心率汇总和粗略地点。"
+                             ? "将分段上传这条录音，并附上可用的会议时段心率汇总。"
                              : "将分段上传这条录音。会议纪要会保存在此 iPhone。")
                     }
             }
@@ -333,9 +355,9 @@ private struct JournalSettings: View {
                 }
             }
             Section {
-                Toggle("分析时使用会议背景", isOn: $journal.includeContext)
+                Toggle("分析时附加心率汇总", isOn: $journal.includeContext)
             } footer: {
-                Text("使用健康 App 中会议时段的心率汇总，以及手表在录音开始时记录的大概地点。地点可在手表「录音与健康」开启。")
+                Text("向分析服务发送会议时段的心率汇总。会议地点在地图中单独显示，可在手表「录音与健康」开启记录。")
             }
             Section {
                 Toggle("自动每日分析", isOn: $journal.dailySettings.automatic)
