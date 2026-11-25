@@ -24,7 +24,7 @@ struct WristJournalPhone: App {
         WindowGroup {
             TabView(selection: $tab) {
                 NavigationStack { DailyReportHome(journal: journal, openRecordings: { tab = 2 }) }
-                    .tabItem { Label("日报", systemImage: "doc.text") }
+                    .tabItem { Label("报告", systemImage: "doc.text") }
                     .tag(0)
                 NavigationStack { PhoneHealth(journal: journal) }
                     .tabItem { Label("健康", systemImage: "heart.text.clipboard") }

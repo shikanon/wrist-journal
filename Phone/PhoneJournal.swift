@@ -14,6 +14,8 @@ final class PhoneJournal: ObservableObject {
     @Published private(set) var hasPersonalKey = ArkCredential.personal.load() != nil
     @Published private(set) var hasOfficialKey = false
     @Published var days: [DailyJournalReport] = []
+    @Published private(set) var reportArchiveDates: [String] = []
+    @Published private(set) var reportArchiveRevision = UUID()
     @Published private(set) var dailyEditionRevision = UUID()
     @Published var processingDays = false
     @Published var dailyStatus: String?
@@ -21,9 +23,7 @@ final class PhoneJournal: ObservableObject {
     @Published var readingHealth = false
     @Published var healthReadError: String?
     @Published private(set) var hasMoreRecordings = false
-    @Published private(set) var hasMoreDays = false
     private var recordingLimit = 50
-    private var dayLimit = 31
     @Published var dailySettings = DailySettings.load() {
         didSet {
             dailySettings.save()
@@ -228,7 +228,13 @@ final class PhoneJournal: ObservableObject {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-journal-fixture"),
            ProcessInfo.processInfo.arguments.contains("-journal-fixture-reset") {
-            do { try seedSimulation() }
+            do {
+                if ProcessInfo.processInfo.arguments.contains("-journal-report-calendar-fixture") {
+                    try seedReportCalendarFixture()
+                } else {
+                    try seedSimulation()
+                }
+            }
             catch { message = error.localizedDescription }
         }
         #endif
@@ -519,10 +525,10 @@ final class PhoneJournal: ObservableObject {
             hasMoreRecordings = page.count > recordingLimit
             recordings = Array(page.prefix(recordingLimit))
             for entry in recordings { loadJob(entry.id) }
+            reportArchiveDates = Set(try store.dailyKeys().map(\.localDate)).sorted()
+            reportArchiveRevision = UUID()
             report = try store.report()
-            let history = try store.dailyReports(limit: dayLimit + 1)
-            hasMoreDays = history.count > dayLimit
-            days = Array(history.prefix(dayLimit))
+            days = try store.dailyReports(limit: 31)
             reportIsDaily = false
             if let latest = days.map(\.generatedAt).max(), latest >= (report?.generatedAt ?? .distantPast) {
                 let recentHealth = Array(JournalReview(id: "health", days: days).healthDays.suffix(7))
@@ -539,7 +545,6 @@ final class PhoneJournal: ObservableObject {
     }
 
     func loadMoreRecordings() { recordingLimit += 50; reload() }
-    func loadMoreDays() { dayLimit += 31; reload() }
 
     func updateHealthReading(enabled: Bool) {
         dailySettings.healthEnabled = enabled

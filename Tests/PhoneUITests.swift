@@ -5,7 +5,7 @@ final class PhoneUITests: XCTestCase {
     func testSyncAndAnalysisSettingsAreAvailable() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.navigationBars["日报"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["报告"].waitForExistence(timeout: 8))
         app.tabBars.buttons["录音"].tap()
         XCTAssertTrue(app.buttons["同步手表录音"].waitForExistence(timeout: 8))
 
@@ -66,11 +66,89 @@ final class PhoneUITests: XCTestCase {
         app.terminate()
         app.launchArguments = ["-journal-fixture"]
         app.launch()
-        app.navigationBars.buttons["历史日报"].tap()
-        app.segmentedControls.buttons["每周"].tap()
-        XCTAssertTrue(app.staticTexts["1 段 · 02:00"].exists)
-        app.segmentedControls.buttons["每月"].tap()
-        XCTAssertTrue(app.staticTexts["1 段 · 02:00"].exists)
+        XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["周报"].tap()
+        XCTAssertTrue(app.staticTexts["1 段 · 02:00"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["月报"].tap()
+        XCTAssertTrue(app.staticTexts["1 段 · 02:00"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testCalendarOpensReportsInOneTap() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-journal-fixture", "-journal-fixture-reset", "-journal-report-calendar-fixture"]
+        app.launch()
+        let newest = app.buttons["report-calendar.slot.5"]
+        let oldest = app.buttons["report-calendar.slot.0"]
+        let selection = app.staticTexts["report-calendar.range"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 5))
+        let archiveDate = selection.label
+        assertSixVisibleSlots(in: app)
+        newest.tap()
+        XCTAssertTrue(app.staticTexts["这一天暂无日报"].waitForExistence(timeout: 5))
+        oldest.tap()
+        XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 5))
+        XCTAssertEqual(selection.label, archiveDate)
+
+        app.segmentedControls.buttons["周报"].tap()
+        assertSixVisibleSlots(in: app)
+        XCTAssertTrue(app.staticTexts["report-calendar.summary"].waitForExistence(timeout: 5))
+        let archiveWeek = selection.label
+        let selectedWeek = (0..<6).map { app.buttons["report-calendar.slot.\($0)"] }
+            .first { $0.isSelected }
+        let expected = oldest.value as? String == "已有报告" ? "report-calendar.summary" : "这一周暂无周报"
+        oldest.tap()
+        XCTAssertNotEqual(selection.label, archiveWeek)
+        XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5))
+        XCTAssertNotNil(selectedWeek)
+        selectedWeek?.tap()
+
+        app.segmentedControls.buttons["月报"].tap()
+        assertSixVisibleSlots(in: app)
+        XCTAssertTrue(app.staticTexts["report-calendar.summary"].waitForExistence(timeout: 5))
+        let archiveMonth = selection.label
+        let expectedMonth = oldest.value as? String == "已有报告" ? "report-calendar.summary" : "这个月暂无月报"
+        let selectedMonth = (0..<6).map { app.buttons["report-calendar.slot.\($0)"] }
+            .first { $0.isSelected }
+        oldest.tap()
+        XCTAssertNotEqual(selection.label, archiveMonth)
+        XCTAssertTrue(app.staticTexts[expectedMonth].waitForExistence(timeout: 5))
+        XCTAssertNotNil(selectedMonth)
+        selectedMonth?.tap()
+
+        let week = app.buttons.matching(identifier: "report-calendar.drill.week").firstMatch
+        for _ in 0..<4 where !week.isHittable { app.swipeUp() }
+        XCTAssertTrue(week.isHittable)
+        week.tap()
+        XCTAssertTrue(app.segmentedControls.buttons["周报"].isSelected)
+
+        app.navigationBars.buttons["选日期"].tap()
+        XCTAssertTrue(app.navigationBars["选日期"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["查看周报"].exists)
+        app.navigationBars.buttons["取消"].tap()
+
+        app.segmentedControls.buttons["日报"].tap()
+        let recent = app.buttons["回到最近"]
+        if recent.exists { recent.tap() }
+        app.navigationBars.buttons["选日期"].tap()
+        let older = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "report-calendar.archive.")).allElementsBoundByIndex
+        XCTAssertGreaterThanOrEqual(older.count, 2)
+        if let oldDay = older.last {
+            for _ in 0..<4 where !oldDay.isHittable { app.swipeUp() }
+            oldDay.tap()
+            XCTAssertTrue(recent.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 5))
+            recent.tap()
+            XCTAssertTrue(app.staticTexts["这一天暂无日报"].waitForExistence(timeout: 5))
+        }
+    }
+
+    @MainActor
+    private func assertSixVisibleSlots(in app: XCUIApplication) {
+        for index in 0..<6 {
+            XCTAssertTrue(app.buttons["report-calendar.slot.\(index)"].isHittable, "Calendar slot \(index)")
+        }
     }
 
     @MainActor
@@ -82,26 +160,31 @@ final class PhoneUITests: XCTestCase {
     }
 
     @MainActor
-    func testDailyReportEditorSavesAndDiscards() {
+    func testDailyReportEditorSavesAndDiscards() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-journal-fixture", "-journal-fixture-reset", "-journal-report-edition-simulation"]
         app.launch()
         let reportTitle = app.staticTexts["daily-report.title"]
         XCTAssertTrue(app.staticTexts["编辑版：差旅与项目交接"].waitForExistence(timeout: 12))
         let edit = app.buttons["编辑日报"]
+        for _ in 0..<3 where !edit.isHittable { app.swipeUp() }
         XCTAssertTrue(edit.isHittable)
         edit.tap()
         let title = app.textFields["daily-report.editor.title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let original = try XCTUnwrap(title.value as? String)
         title.tap()
         title.typeText("1")
+        let expected = try XCTUnwrap(title.value as? String)
+        XCTAssertEqual(expected.replacingOccurrences(of: "1", with: ""), original)
+        XCTAssertEqual(expected.count, original.count + 1)
         app.buttons["保存"].tap()
-        let expected = "编辑版：差旅与项目交接1"
         XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5))
 
         edit.tap()
         title.tap()
         title.typeText("2")
+        XCTAssertNotEqual(title.value as? String, expected)
         app.buttons["取消"].tap()
         app.alerts.buttons["放弃更改"].tap()
         XCTAssertEqual(reportTitle.label, expected)
@@ -139,7 +222,7 @@ final class PhoneUITests: XCTestCase {
         let backup = app.switches["云端备份原始录音"]
         XCTAssertTrue(backup.exists)
         backup.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
-        app.tabBars.buttons["日报"].tap()
+        app.tabBars.buttons["报告"].tap()
         app.buttons["分析已结束日期"].tap()
         app.buttons["开始每日分析"].tap()
         let failed = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "云备份未完成")).firstMatch

@@ -8,6 +8,8 @@
 	objects = {
 		F10000000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyReportPresentation.swift; sourceTree = "<group>"; };
 		F10000000000000000000004 = { isa = PBXBuildFile; fileRef = F10000000000000000000003; };
+		F10000000000000000000005 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportPeriodPresentation.swift; sourceTree = "<group>"; };
+		F10000000000000000000006 = { isa = PBXBuildFile; fileRef = F10000000000000000000005; };
 		F10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLocationView.swift; sourceTree = "<group>"; };
 		F10000000000000000000002 = { isa = PBXBuildFile; fileRef = F10000000000000000000001; };
 		E10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingExperience.swift; sourceTree = "<group>"; };
@@ -337,6 +339,7 @@
 			children = (
 				F10000000000000000000001,
 				F10000000000000000000003,
+				F10000000000000000000005,
 				D1000000000000000000000B,
 				C10000000000000000000007,
 				C1000000000000000000000F,
@@ -641,6 +644,7 @@
 			files = (
 				F10000000000000000000002,
 				F10000000000000000000004,
+				F10000000000000000000006,
 				D10000000000000000000009,
 				D1000000000000000000000C,
 				D10000000000000000000002,

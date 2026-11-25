@@ -57,6 +57,24 @@ enum CoreRegression {
         try check(JournalDayKey.utcOffset(at: boundary, in: TimeZone(identifier: "Asia/Kolkata")!) == "UTC+05:30",
                   "minute offsets survive travel display")
         try check(!JournalDayKey(date: .now, timeZone: "Asia/Shanghai").hasEnded(), "today is retained")
+        let recentDays = ReportPeriod.day.sixSlots(endingAt: "2026-03-10")
+        try check(recentDays.map(\.start) == ["2026-03-05", "2026-03-06", "2026-03-07",
+                                            "2026-03-08", "2026-03-09", "2026-03-10"] &&
+                  recentDays.allSatisfy { $0.start == $0.end }, "today and previous five dates survive a DST boundary")
+        let recentWeeks = ReportPeriod.week.sixSlots(endingAt: "2027-01-01")
+        try check(recentWeeks.count == 6 && recentWeeks.first?.start == "2026-11-23" &&
+                  recentWeeks.last == .init(start: "2026-12-28", end: "2027-01-03"),
+                  "weekly slots are Monday through Sunday and cross the year")
+        try check(ReportPeriod.week.range(containing: "2027-01-03") == recentWeeks.last &&
+                  ReportPeriod.week.range(containing: "2027-01-04")?.start == "2027-01-04",
+                  "Sunday and the following Monday belong to different weeks")
+        let recentMonths = ReportPeriod.month.sixSlots(endingAt: "2028-02-29")
+        try check(recentMonths.count == 6 && recentMonths.first?.start == "2027-09-01" &&
+                  recentMonths.last == .init(start: "2028-02-01", end: "2028-02-29"),
+                  "month slots use whole Gregorian calendar months, including leap day")
+        try check(ReportPeriod.day.range(containing: "2027-02-29") == nil &&
+                  ReportPeriod.month.range(containing: "2027-02-01")?.end == "2027-02-28",
+                  "invalid archive labels are not rolled into a later month")
 
         let root = URL.temporaryDirectory.appendingPathComponent("WristJournalRegression-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -143,6 +161,27 @@ enum CoreRegression {
             healthNote: nil, thresholds: settings, cloudBackupRequired: false)
         try store.saveDaily(todayReport)
         try check(try store.purgeDaily(todayDay).isEmpty, "store refuses today's raw cleanup")
+        let archive = JournalStore(root: root.appendingPathComponent("PeriodCalendar"))
+        for offset in 0..<40 {
+            let date = ReportPeriod.calendar.date(byAdding: .day, value: offset, to: ReportPeriod.date("2026-12-27")!)!
+            let label = ReportPeriod.label(date)
+            try archive.saveDaily(DailyJournalReport(
+                day: JournalDayKey(localDate: label, timeZoneIdentifier: "Asia/Shanghai"),
+                generatedAt: start, meetings: [], health: HealthDay(start: date, localDate: label),
+                healthNote: nil, thresholds: settings, cloudBackupRequired: false))
+        }
+        try archive.saveDaily(newYearReport)
+        let selectedWeek = recentWeeks.last!
+        let loadedWeek = try archive.dailyReports(from: selectedWeek.start, through: selectedWeek.end)
+        try check(try archive.dailyReports(limit: 31).allSatisfy { $0.day.localDate > selectedWeek.end },
+                  "fixture puts the chosen week entirely outside the recent archive page")
+        try check(loadedWeek.count == 8 && loadedWeek.first?.day.localDate == "2027-01-03" &&
+                  loadedWeek.last?.day.localDate == "2026-12-28" &&
+                  Set(loadedWeek.filter { $0.day.localDate == "2026-12-31" }.map(\.day.timeZoneIdentifier)) ==
+                    ["Pacific/Auckland", "Asia/Shanghai"], "targeted read includes both endpoints and both time zones")
+        try check(try archive.dailyReports(from: "2026-12-31", through: "2026-12-31").count == 2 &&
+                  archive.dailyReports(from: "2026-12-01", through: "2026-12-26").isEmpty,
+                  "targeted reads distinguish an exact day from an empty period")
         let legacy = #"{"id":"00000000-0000-0000-0000-000000000001","startedAt":0,"duration":10,"state":"saved","note":""}"#
         let old = try JSONDecoder().decode(Recording.self, from: Data(legacy.utf8))
         try check(old.isPlayable && old.timeZoneIdentifier == nil && old.rawDeletedAt == nil, "old recordings decode")

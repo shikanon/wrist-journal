@@ -398,6 +398,14 @@ struct JournalStore {
                 .dropFirst(max(0, offset)).prefix(max(0, limit)).compactMap { try daily($0.day) }
         }
     }
+    func dailyReports(from first: String, through last: String) throws -> [DailyJournalReport] {
+        try state.lock.withLock {
+            try catalog().days.values
+                .filter { first <= $0.day.localDate && $0.day.localDate <= last }
+                .sorted { $0.day.id > $1.day.id }
+                .compactMap { try daily($0.day) }
+        }
+    }
     func dailyKeys() throws -> [JournalDayKey] {
         try state.lock.withLock { try catalog().days.values.map(\.day) }
     }

@@ -52,6 +52,68 @@ struct JournalDayKey: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+enum ReportPeriod: String, CaseIterable, Hashable {
+    case day, week, month
+
+    struct Range: Hashable, Identifiable {
+        let start: String
+        let end: String
+        var id: String { start + "/" + end }
+        func contains(_ date: String) -> Bool { start <= date && date <= end }
+    }
+
+    // Archive labels are civil dates. UTC here is only a neutral calendar for
+    // comparing labels; it never rebuckets a recording into another date.
+    static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        return calendar
+    }()
+
+    static func date(_ label: String) -> Date? {
+        let pieces = label.split(separator: "-", omittingEmptySubsequences: false)
+        guard pieces.count == 3, let year = Int(pieces[0]), (1...9999).contains(year),
+              let month = Int(pieces[1]), let day = Int(pieces[2]),
+              let date = calendar.date(from: DateComponents(year: year, month: month, day: day)),
+              Self.label(date) == label else { return nil }
+        return date
+    }
+
+    static func label(_ date: Date) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    private var component: Calendar.Component {
+        switch self {
+        case .day: .day
+        case .week: .weekOfYear
+        case .month: .month
+        }
+    }
+
+    func range(containing label: String) -> Range? {
+        guard let date = Self.date(label) else { return nil }
+        return range(containing: date)
+    }
+
+    private func range(containing date: Date) -> Range? {
+        guard let interval = Self.calendar.dateInterval(of: component, for: date),
+              let last = Self.calendar.date(byAdding: .day, value: -1, to: interval.end) else { return nil }
+        return Range(start: Self.label(interval.start), end: Self.label(last))
+    }
+
+    func sixSlots(endingAt label: String) -> [Range] {
+        guard let date = Self.date(label),
+              let start = Self.calendar.dateInterval(of: component, for: date)?.start else { return [] }
+        return (-5...0).compactMap { offset in
+            Self.calendar.date(byAdding: component, value: offset, to: start).flatMap { range(containing: $0) }
+        }
+    }
+}
+
 struct SpeechWindow: Codable, Sendable {
     let start: Date
     let end: Date

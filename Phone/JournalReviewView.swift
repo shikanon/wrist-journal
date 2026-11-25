@@ -1,89 +1,5 @@
 import SwiftUI
 
-struct JournalReviewView: View {
-    @ObservedObject var journal: PhoneJournal
-    @State private var period = 0
-
-    var body: some View {
-        #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-sources-preview") {
-            SourceReviewPreview(journal: journal)
-        } else if ProcessInfo.processInfo.arguments.contains("-journal-fixture"),
-                  ProcessInfo.processInfo.arguments.contains("-journal-map-preview-report"),
-                  let firstMeetingDay = journal.days.first(where: { !$0.meetings.isEmpty }) {
-            DailyReportView(journal: journal, report: firstMeetingDay)
-        } else { content }
-        #else
-        content
-        #endif
-    }
-
-    private var content: some View {
-        List {
-            Section {
-                Picker("回顾范围", selection: $period) {
-                    Text("每日").tag(0)
-                    Text("每周").tag(1)
-                    Text("每月").tag(2)
-                }.pickerStyle(.segmented)
-            } footer: {
-                Text("按录音开始时的当地日期归档。今日暂不清理；周和月回顾复用日报。")
-            }
-            if journal.hasMoreDays {
-                Section {
-                    Text("当前显示已加载日期的回顾；更早日期按需加载。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Button("加载更早日期") { journal.loadMoreDays() }
-                }
-            }
-            if journal.days.isEmpty {
-                Section { Text("暂无日报。同步录音后，分析已结束日期即可生成回顾。").foregroundStyle(.secondary) }
-            } else if period == 0 {
-                ForEach(journal.days) { day in
-                    NavigationLink {
-                        ArchivedDailyReportView(journal: journal, original: day)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(day.day.localDate)
-                            Text(dayLabel(day))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } else {
-                ForEach(JournalReview.grouped(journal.days, monthly: period == 2)) { review in
-                    Section(review.title) {
-                        LabeledContent("会议", value: "\(review.meetingCount) 段 · \(durationText(review.duration))")
-                        ForEach(HealthMetric.allCases) { metric in
-                            let health = HealthReport(generatedAt: .now, timeZone: "各日报当地时区",
-                                days: review.healthDays, unavailableMetrics: [])
-                            LabeledContent(metric.title, value: health.summary(metric).map {
-                                "\(metric.display($0)) \(metric.unit)"
-                            } ?? "无数据")
-                        }
-                        LabeledContent("未发现运动的心率与语音重合", value: "\(review.sedentaryEvents) 次")
-                        LabeledContent("伴随运动的重合", value: "\(review.activityEvents) 次")
-                        ForEach(review.days) { day in
-                            NavigationLink(day.day.localDate + " · " + dayLabel(day)) {
-                                ArchivedDailyReportView(journal: journal, original: day)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .navigationTitle("历史日报")
-    }
-
-    private func dayLabel(_ report: DailyJournalReport) -> String {
-        let zone = report.day.calendar.timeZone
-        let offsets = Set(report.meetings.map { JournalDayKey.utcOffset(at: $0.startedAt, in: zone) })
-            .sorted()
-        if !offsets.isEmpty { return "\(report.meetings.count) 段会议 · " + offsets.joined(separator: " / ") }
-        return "健康日报"
-    }
-}
-
 struct ReportAnalysisSection: View {
     @ObservedObject var journal: PhoneJournal
     let onRequest: () -> Void
@@ -168,7 +84,7 @@ struct DailyAnalysisConfirmation: View {
 
 #if DEBUG
 /// Render-only probe using the same source component and real persisted fixture report.
-private struct SourceReviewPreview: View {
+struct SourceReviewPreview: View {
     @ObservedObject var journal: PhoneJournal
     @StateObject private var playback = LocalPlayback()
     private var meeting: MeetingDigest? {

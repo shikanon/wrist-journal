@@ -1,4 +1,5 @@
 import Charts
+import Combine
 import ImageIO
 import PhotosUI
 import SwiftUI
@@ -7,14 +8,33 @@ import UniformTypeIdentifiers
 struct DailyReportHome: View {
     @ObservedObject var journal: PhoneJournal
     let openRecordings: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var today = JournalDayKey(date: .now, timeZone: TimeZone.current.identifier).localDate
+    @State private var period = ReportPeriod.day
+    @State private var chosenDate: String?
+    @State private var historyWindow: String?
+    @State private var chosenZone: String?
+    @State private var datePicker = false
     @State private var analysisPreview: DailyAnalysisPreview?
-    private var latest: DailyJournalReport? { DailyJournalReport.preferred(in: journal.days) }
+
+    private var anchor: String {
+        if let chosenDate { return chosenDate }
+        guard period == .day, !journal.reportArchiveDates.contains(today),
+              let first = period.sixSlots(endingAt: today).first else { return today }
+        let recent = journal.days.filter { first.start <= $0.day.localDate && $0.day.localDate < today }
+        return DailyJournalReport.preferred(in: recent)?.day.localDate
+            ?? journal.reportArchiveDates.last(where: { first.start <= $0 && $0 < today })
+            ?? today
+    }
 
     var body: some View {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-journal-sources-preview") ||
-            ProcessInfo.processInfo.arguments.contains("-journal-map-preview-report") {
-            JournalReviewView(journal: journal)
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-journal-sources-preview") {
+            SourceReviewPreview(journal: journal)
+        } else if arguments.contains("-journal-fixture"), arguments.contains("-journal-map-preview-report"),
+                  let meetingDay = journal.days.first(where: { !$0.meetings.isEmpty }) {
+            DailyReportView(journal: journal, report: meetingDay)
         } else {
             home
         }
@@ -23,44 +43,80 @@ struct DailyReportHome: View {
         #endif
     }
 
+    @ViewBuilder
     private var home: some View {
-        List {
-            if let report = latest {
-                DailyReportSections(journal: journal, report: report)
-                    .id(report.id)
-            } else {
-                ContentUnavailableView {
-                    Label("还没有日报", systemImage: "doc.text")
-                } description: {
-                    Text("同步手表录音，再分析已结束的日期。会议要点会汇总到这里。")
-                } actions: {
-                    Button("前往录音") { openRecordings() }
+        if let range = period.range(containing: anchor), let current = period.range(containing: today) {
+            VStack(spacing: 0) {
+                ReportCalendarHeader(period: period, slots: period.sixSlots(endingAt: historyWindow ?? today),
+                    selected: range, current: current, archiveDates: journal.reportArchiveDates,
+                    changePeriod: { select(anchor, period: $0) },
+                    selectSlot: { slot in
+                        chosenDate = slot.contains(anchor) ? anchor : min(today, slot.start)
+                        chosenZone = nil
+                    },
+                    returnToRecent: historyWindow == nil ? nil : { select(today, period: period) })
+
+                SelectedReportList(journal: journal, period: period, range: range,
+                    chosenZone: $chosenZone, openRecordings: openRecordings, openPeriod: select,
+                    showAnalysis: showAnalysis)
+                    .id(range)
+            }
+            .navigationTitle("报告")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("选日期") { datePicker = true }
+                        .accessibilityHint("按日期查看报告，包括更早的日期")
                 }
-                .listRowBackground(Color.clear)
-            }
-            ReportAnalysisSection(journal: journal, onRequest: showAnalysis)
-        }
-        .navigationTitle("日报")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink("历史日报") { JournalReviewView(journal: journal) }
-            }
-            if latest != nil, journal.processingMode != .none {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: showAnalysis) {
-                        Label("生成日报", systemImage: "sparkles")
+                if !journal.reportArchiveDates.isEmpty, journal.processingMode != .none {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: showAnalysis) {
+                            Label("生成日报", systemImage: "sparkles")
+                        }
+                        .disabled(journal.processingDays || journal.hasAnalysisWorker || journal.readingHealth)
                     }
-                    .disabled(journal.processingDays || journal.hasAnalysisWorker || journal.readingHealth)
                 }
             }
-        }
-        .sheet(item: $analysisPreview) { scope in
-            DailyAnalysisConfirmation(scope: scope) {
-                analysisPreview = nil
-                Task { _ = await journal.processDays(automatic: false, preview: scope) }
+            .sheet(isPresented: $datePicker) {
+                ReportDatePicker(period: period, selected: anchor, today: today,
+                    archiveDates: journal.reportArchiveDates) { select($0, period: period) }
             }
+            .sheet(item: $analysisPreview) { scope in
+                DailyAnalysisConfirmation(scope: scope) {
+                    analysisPreview = nil
+                    Task { _ = await journal.processDays(automatic: false, preview: scope) }
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { refreshToday() } }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in refreshToday() }
+            .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in refreshToday() }
+            #if DEBUG
+            .onAppear {
+                // Only the render fixture sets the starting period; all content uses the normal archive reader.
+                let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains("-journal-report-calendar-fixture"),
+                   let argument = arguments.first(where: { $0.hasPrefix("-journal-report-calendar-preview=") }),
+                   let mode = ReportPeriod(rawValue: String(argument.dropFirst("-journal-report-calendar-preview=".count))) {
+                    select(arguments.contains("-journal-report-calendar-empty") ? today : calendarFixtureReportDate, period: mode)
+                }
+            }
+            #endif
         }
+    }
+
+    private func select(_ date: String, period: ReportPeriod) {
+        let date = min(date, today)
+        self.period = period
+        chosenDate = date
+        chosenZone = nil
+        historyWindow = period.sixSlots(endingAt: today).contains(where: { $0.contains(date) }) ? nil : date
+    }
+
+    private func refreshToday() {
+        let updated = JournalDayKey(date: .now, timeZone: TimeZone.current.identifier).localDate
+        guard today != updated else { return }
+        today = updated
+        if let chosenDate { select(chosenDate, period: period) }
     }
 
     private func showAnalysis() {
@@ -69,19 +125,7 @@ struct DailyReportHome: View {
     }
 }
 
-struct ArchivedDailyReportView: View {
-    @ObservedObject var journal: PhoneJournal
-    let original: DailyJournalReport
-
-    var body: some View {
-        let report = journal.days.first { $0.id == original.id } ?? original
-        List { DailyReportSections(journal: journal, report: report) }
-            .navigationTitle("日报")
-            .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct DailyReportSections: View {
+struct DailyReportSections: View {
     @ObservedObject var journal: PhoneJournal
     let report: DailyJournalReport
     @State private var edition: DailyReportEdition?
