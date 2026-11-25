@@ -11,10 +11,10 @@ struct MeetingLocationView: View {
             if CLLocationCoordinate2DIsValid(coordinate) {
                 mapPreview(at: coordinate, accuracy: location.accuracy.flatMap { (1...100_000).contains($0) ? $0 : nil })
             } else {
-                unavailable("会议地点不可用")
+                unavailable("录音地点不可用")
             }
         } else {
-            unavailable("未记录会议地点")
+            unavailable("未记录录音地点")
         }
     }
 

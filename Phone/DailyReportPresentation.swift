@@ -1,4 +1,3 @@
-import Charts
 import Combine
 import ImageIO
 import PhotosUI
@@ -33,8 +32,8 @@ struct DailyReportHome: View {
         if arguments.contains("-journal-sources-preview") {
             SourceReviewPreview(journal: journal)
         } else if arguments.contains("-journal-fixture"), arguments.contains("-journal-map-preview-report"),
-                  let meetingDay = journal.days.first(where: { !$0.meetings.isEmpty }) {
-            DailyReportView(journal: journal, report: meetingDay)
+                  let report = journal.days.first(where: { !$0.meetings.isEmpty }) {
+            DailyReportView(journal: journal, report: report)
         } else {
             home
         }
@@ -134,37 +133,23 @@ struct DailyReportSections: View {
     @State private var loaded = false
     private var narrative: DailyReportNarrative { edition?.narrative ?? report.narrative }
     private var photos: [DailyReportEdition.Photo] { edition?.photos ?? [] }
-    private var newMeetingCount: Int { edition.map { report.meetingIDs.subtracting($0.meetingIDs).count } ?? 0 }
+    private var newSourceCount: Int { edition.map { report.meetingIDs.subtracting($0.meetingIDs).count } ?? 0 }
 
     var body: some View {
         Section {
-            hero
-                .listRowInsets(.init(top: 0, leading: 0, bottom: 0, trailing: 0))
-                .listRowBackground(Color.clear)
+            article
                 .sheet(item: $reportBeingEdited) { snapshot in
                     DailyReportEditor(journal: journal, report: snapshot, edition: edition) { saved in
                         edition = saved
                     }
                 }
-        }
-        Section {
-            ReportMarkdown(markdown: narrative.markdown)
-                .padding(.vertical, 6)
-            if newMeetingCount > 0 {
-                Label("新增 \(newMeetingCount) 段会议。已编辑的正文保留，可在来源中查看新内容。", systemImage: "doc.badge.plus")
+            if newSourceCount > 0 {
+                Label("有新录音已整理。可以在录音来源中查看，已编辑的正文会保留。", systemImage: "doc.badge.plus")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if loadError != nil {
                 Text("暂时无法读取你的编辑版，下方操作可重新读取。").font(.footnote).foregroundStyle(.secondary)
                 Button("重新读取编辑版") { loadEdition() }
-            }
-        } header: {
-            HStack {
-                Text(edition == nil ? (report.meetings.isEmpty ? "概览" : "AI 纪要要点") : "编辑版正文")
-                Spacer()
-                Button("编辑日报", systemImage: "square.and.pencil") { reportBeingEdited = report }
-                    .textCase(nil)
-                    .disabled(!loaded || loadError != nil)
             }
         }
         if !photos.isEmpty {
@@ -172,18 +157,7 @@ struct DailyReportSections: View {
                 ForEach(photos) { photo in ReportPhotoView(photo: photo) }
             }
         }
-        if !report.meetingHours.isEmpty {
-            Section("会议时间分布") { ReportMeetingChart(hours: report.meetingHours) }
-        }
-        Section("来源与分享") {
-            if !report.meetings.isEmpty {
-                NavigationLink {
-                    DailyReportView(journal: journal, report: report)
-                } label: {
-                    Label("会议与来源 · \(report.meetings.count) 段", systemImage: "text.quote")
-                }
-                .accessibilityIdentifier("daily-report.sources")
-            }
+        Section("补充信息") {
             if !report.health.metrics.isEmpty {
                 DisclosureGroup {
                     ForEach(HealthMetric.allCases) { metric in
@@ -195,40 +169,45 @@ struct DailyReportSections: View {
                     Label("当日健康", systemImage: "heart.text.clipboard")
                 }
             }
+            if !report.meetings.isEmpty {
+                NavigationLink {
+                    DailyReportView(journal: journal, report: report)
+                } label: {
+                    Label("录音与来源", systemImage: "waveform")
+                }
+                .accessibilityIdentifier("daily-report.sources")
+            }
             ShareLink(item: "\(narrative.title) · \(report.day.localDate)\n\n\(narrative.markdown)") {
                 Label("分享日报文字", systemImage: "square.and.arrow.up")
             }
         }
     }
 
-    private var hero: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Label(report.day.localDate, systemImage: "calendar")
-                .font(.subheadline.monospacedDigit().weight(.medium))
-                .foregroundStyle(.secondary)
-            Text(narrative.title)
-                .font(.system(.largeTitle, design: .serif).weight(.bold))
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("daily-report.title")
-                .fixedSize(horizontal: false, vertical: true)
-            if !report.meetings.isEmpty {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 22) { reportStats }
-                    VStack(alignment: .leading, spacing: 8) { reportStats }
+    private var article: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(narrative.title)
+                    .font(.system(.title, design: .serif).weight(.bold))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("daily-report.title")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                Button { reportBeingEdited = report } label: {
+                    Label("编辑日报", systemImage: "square.and.pencil")
+                        .labelStyle(.iconOnly)
+                        .font(.body.weight(.semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .background(.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                 }
-                .font(.subheadline.weight(.medium))
+                .buttonStyle(.borderless)
+                .disabled(!loaded || loadError != nil)
             }
-            if edition != nil {
-                Label("已编辑", systemImage: "checkmark.circle.fill").font(.caption.weight(.medium))
-            }
+            if edition != nil { Text("已编辑").font(.caption).foregroundStyle(.secondary) }
+            ReportMarkdown(markdown: narrative.markdown)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background {
-            RoundedRectangle(cornerRadius: 20)
-                .fill(.teal.opacity(0.12).gradient)
-                .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(.teal.opacity(0.2)) }
-        }
+        .padding(.vertical, 12)
         .task(id: report.id) {
             loadEdition()
             #if DEBUG
@@ -240,11 +219,6 @@ struct DailyReportSections: View {
         .onChange(of: journal.dailyEditionRevision) { _, _ in loadEdition() }
     }
 
-    @ViewBuilder private var reportStats: some View {
-        Label("\(report.meetings.count) 段会议", systemImage: "bubble.left.and.bubble.right")
-        Label("总时长 \(durationText(report.meetings.reduce(0) { $0 + $1.duration }))", systemImage: "clock")
-    }
-
     private func loadEdition() {
         do {
             edition = try journal.store.dailyEdition(report.day)
@@ -253,36 +227,6 @@ struct DailyReportSections: View {
             loadError = error.localizedDescription
         }
         loaded = true
-    }
-}
-
-private struct ReportMeetingChart: View {
-    let hours: [DailyJournalReport.MeetingHour]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Chart(hours) { item in
-                BarMark(x: .value("录制开始小时", item.hour),
-                        y: .value("分钟", item.duration / 60), width: .ratio(0.64))
-                    .foregroundStyle(.teal.gradient)
-                    .cornerRadius(3)
-                    .accessibilityLabel("\(item.hour) 点开始")
-                    .accessibilityValue(durationText(item.duration))
-            }
-            .chartXScale(domain: -0.8...23.8)
-            .chartXAxis {
-                AxisMarks(values: [0, 6, 12, 18, 23]) { value in
-                    AxisValueLabel {
-                        if let hour = value.as(Int.self) { Text("\(hour)时") }
-                    }
-                }
-            }
-            .chartYAxisLabel("分钟")
-            .frame(height: 148)
-            Text("按录制地的开始小时计入；跨小时的录音不拆分。")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 6)
     }
 }
 
@@ -382,8 +326,15 @@ extension PhoneJournal {
                 throw AnalysisError.invalidResponse
             }
             let next = report.meetings[0].startedAt.addingTimeInterval(3 * 3600)
-            report.meetings.append(MeetingDigest(id: UUID(), startedAt: next, duration: 840,
-                title: "项目交接", location: nil, minutes: "团队确认在下周跟进交接事项。", events: [], healthNote: nil))
+            let personalNote = MeetingDigest(id: UUID(), startedAt: next, duration: 840,
+                title: "散步随记", location: nil, minutes: "早上沿河散步，记下了一条路线。", events: [], healthNote: nil)
+            var singleSourceReport = report
+            singleSourceReport.meetings = [personalNote]
+            let singleSourceDraft = try await draftDailyReport(singleSourceReport)
+            guard singleSourceDraft.title == "河边散步", singleSourceDraft.markdown.contains("沿河散步") else {
+                throw AnalysisError.invalidResponse
+            }
+            report.meetings.append(personalNote)
             try store.saveDaily(report)
             let generated = try await draftDailyReport(report)
             guard generated.title == "差旅与项目交接", generated.markdown.contains("## 待办"),
@@ -421,9 +372,9 @@ extension PhoneJournal {
                 title: "迟到会议", location: nil, minutes: "这是稍后同步的会议。", events: [], healthNote: nil))
             try store.saveDaily(report)
             reload()
-            guard try store.dailyEdition(report.day) == edition, report.meetingHours.count == 2,
+            guard try store.dailyEdition(report.day) == edition, report.narrative.markdown.contains("沿河散步"),
                   report.meetings.count - edition.meetingIDs.count == 1 else { throw AnalysisError.invalidResponse }
-            evidence = ["passed": true, "textOnlyAIDraft": true, "downsampledWidth": Int(decoded.size.width),
+            evidence = ["passed": true, "textOnlyAIDraft": true, "singleSourceDraft": true, "downsampledWidth": Int(decoded.size.width),
                         "photoBytes": jpeg.count, "laterMeetingPreservesEdits": true]
         } catch {
             evidence = ["passed": false, "error": error.localizedDescription]
@@ -483,7 +434,7 @@ private struct DailyReportEditor: View {
                 }
                 .pickerStyle(.segmented)
                 if let failure { Text(failure).foregroundStyle(.red).font(.footnote) }
-                if busy { ProgressView(aiRequest == nil ? "正在读取图片" : "AI 正在整理纪要") }
+                if busy { ProgressView(aiRequest == nil ? "正在读取图片" : "AI 正在整理日报") }
                 if preview {
                     Section {
                         Text(draft.narrative.title).font(.title.bold())
@@ -514,7 +465,7 @@ private struct DailyReportEditor: View {
             .confirmationDialog("用 AI 重新起草正文？", isPresented: $confirmAI, titleVisibility: .visible) {
                 Button("生成草稿") { aiRequest = UUID() }
             } message: {
-                Text("将最多 12 场已生成的会议纪要发送到火山方舟，可能包含此前附加到纪要中的心率汇总。不会发送原音、照片或编辑内容。生成会替换编辑器里的标题和正文，保存后才会应用。")
+                Text("将最多 \(MeetingAnalyzer.dailyDraftSourceLimit) 条录音整理文字发送到火山方舟，可能包含此前已附加的心率汇总。不会发送原音、照片或编辑内容。生成的草稿会替换编辑器里的标题和正文，保存后才会应用。")
             }
             .task(id: aiRequest) {
                 guard aiRequest != nil else { return }
@@ -572,8 +523,8 @@ private struct DailyReportEditor: View {
             Text("照片和手动编辑保存在这台 iPhone。")
         }
         Section {
-            if journal.processingMode == .phone, report.meetings.count >= 2 {
-                Button("用 AI 合并会议纪要", systemImage: "sparkles") { confirmAI = true }
+            if journal.processingMode == .phone, !report.draftSourceNotes.isEmpty {
+                Button("用 AI 整理当日记录", systemImage: "sparkles") { confirmAI = true }
             }
             Button("恢复自动正文") { draft.narrative = report.narrative }
                 .disabled(draft.narrative == report.narrative)

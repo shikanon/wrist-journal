@@ -246,7 +246,7 @@ private struct WatchLibrary: View {
                 Text(entry.title).lineLimit(2)
                 Text(watchAudioStatus(entry, store: journal.store)).font(.caption2).foregroundStyle(.secondary)
                 if journal.watchMinutes[entry.id] != nil {
-                    Label("纪要已生成", systemImage: "doc.text").font(.caption2)
+                    Label("录音已整理", systemImage: "doc.text").font(.caption2)
                 }
             }
         }
@@ -289,14 +289,14 @@ private struct WatchLibrarySettings: View {
                         journal.requestProcessing(journal.recordings.filter { JournalDayKey(recording: $0).hasEnded() }.map(\.id))
                     }
                     .disabled(journal.current != nil || journal.starting || journal.recovery.pending != nil)
-                    Text("将使用手机配置的接口上传录音并生成纪要。").font(.caption2)
+                    Text("将使用手机配置的接口上传并整理录音。").font(.caption2)
                 }
             }
             Section("存储") {
                 Text(journal.transfer.storage.title).font(.caption)
                 if let status = journal.storageStatus { Text(status).font(.caption2).foregroundStyle(.secondary) }
             }
-            Toggle("记录会议地点", isOn: Binding(get: { journal.collectLocation }, set: journal.setCollectLocation))
+            Toggle("记录录音地点", isOn: Binding(get: { journal.collectLocation }, set: journal.setCollectLocation))
         }
         .navigationTitle("录音设置")
     }
@@ -310,10 +310,10 @@ private struct WatchReview: View {
         let citations = (try? journal.store.analysis(id))?.citations ?? []
         let audio = journal.store.sourceAudio(id)
         List {
-            Section("纪要") { Text(journal.watchMinutes[id] ?? "") }
+            Section("整理内容") { Text(journal.watchMinutes[id] ?? "") }
             Section("原文来源") {
                 if citations.isEmpty {
-                    Text("这份纪要暂无原文引用。").font(.footnote)
+                    Text("这条记录暂无原文引用。").font(.footnote)
                 }
                 ForEach(citations) { citation in
                     VStack(alignment: .leading, spacing: 6) {
@@ -335,7 +335,7 @@ private struct WatchReview: View {
                 if playback.playing { Button("停止回听") { playback.stop() } }
             }
         }
-        .navigationTitle("纪要与来源")
+        .navigationTitle("记录与来源")
         .onDisappear { playback.stop() }
     }
 }
@@ -354,7 +354,7 @@ private struct WatchRecording: View {
                 journal.recentReviewEntries.first(where: { $0.id == id }) {
                 let audio = journal.store.sourceAudio(entry)
                 if journal.watchMinutes[id] != nil {
-                    NavigationLink("查看纪要与来源") { WatchReview(journal: journal, id: id) }
+                    NavigationLink("查看记录与来源") { WatchReview(journal: journal, id: id) }
                 }
                 Section {
                     Text(JournalDayKey(recording: entry).recordingTime(entry.startedAt, includeDate: true))

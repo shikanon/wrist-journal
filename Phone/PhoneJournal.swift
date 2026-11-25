@@ -114,8 +114,8 @@ final class PhoneJournal: ObservableObject {
     func draftDailyReport(_ report: DailyJournalReport) async throws -> DailyReportNarrative {
         try requirePhoneProcessing()
         let generation = processingGeneration
-        let notes = report.meetings.sorted { $0.startedAt < $1.startedAt }.map(\.minutes)
-        guard notes.count >= 2 else { throw AnalysisError.invalidResponse }
+        let notes = report.draftSourceNotes
+        guard !notes.isEmpty else { throw AnalysisError.invalidResponse }
         let key: String
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-journal-report-edition-simulation") {

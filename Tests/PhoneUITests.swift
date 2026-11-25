@@ -48,7 +48,7 @@ final class PhoneUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["1 个归档日 · 1 段"].exists)
         app.buttons["开始每日分析"].tap()
         XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 10))
-        openMeetingSources(in: app)
+        openRecordingSources(in: app)
         XCTAssertTrue(app.staticTexts["模拟纪要：确认差旅会议的行动项，下周跟进。"].waitForExistence(timeout: 5))
         assertMeetingMap(in: app)
         let event = app.staticTexts["心率与语音重合 · 未发现运动"]
@@ -58,7 +58,7 @@ final class PhoneUITests: XCTestCase {
         }
         XCTAssertTrue(event.isHittable)
         app.tabBars.buttons["录音"].tap()
-        XCTAssertTrue(app.staticTexts["原音已清理 · 纪要在回顾中保留"].exists)
+        XCTAssertTrue(app.staticTexts["原音已清理 · 整理内容已保留"].exists)
         app.cells.containing(.staticText, identifier: "差旅模拟会议").firstMatch.tap()
         XCTAssertFalse(app.buttons["播放"].exists)
         XCTAssertFalse(app.buttons["导出 M4A"].exists)
@@ -67,10 +67,15 @@ final class PhoneUITests: XCTestCase {
         app.launchArguments = ["-journal-fixture"]
         app.launch()
         XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 5))
+        let excerpt = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "确认差旅会议的行动项，下周跟进"))
+            .firstMatch
         app.segmentedControls.buttons["周报"].tap()
-        XCTAssertTrue(app.staticTexts["1 段 · 02:00"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["report-calendar.summary"].waitForExistence(timeout: 5))
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
         app.segmentedControls.buttons["月报"].tap()
-        XCTAssertTrue(app.staticTexts["1 段 · 02:00"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["report-calendar.summary"].waitForExistence(timeout: 5))
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -83,6 +88,10 @@ final class PhoneUITests: XCTestCase {
         let selection = app.staticTexts["report-calendar.range"]
         XCTAssertTrue(newest.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["daily-report.title"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["daily-report.title"].label, "当日记录")
+        XCTAssertTrue(app.staticTexts["早上沿河走了一段，桥边的银杏已经变黄。下次想带相机去拍几张。"].isHittable)
+        XCTAssertTrue(app.staticTexts["晚些时候想起来，出门前要给自行车打气。"].isHittable)
+        XCTAssertFalse(app.staticTexts["会议时间分布"].exists)
         let archiveDate = selection.label
         assertSixVisibleSlots(in: app)
         newest.tap()
@@ -152,11 +161,12 @@ final class PhoneUITests: XCTestCase {
     }
 
     @MainActor
-    private func openMeetingSources(in app: XCUIApplication) {
+    private func openRecordingSources(in app: XCUIApplication) {
         let sources = app.descendants(matching: .any)["daily-report.sources"].firstMatch
         for _ in 0..<5 where !sources.isHittable { app.swipeUp() }
         XCTAssertTrue(sources.isHittable)
         sources.tap()
+        XCTAssertTrue(app.navigationBars["录音与来源"].waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -230,7 +240,7 @@ final class PhoneUITests: XCTestCase {
         for _ in 0..<5 where !failed.isHittable { app.swipeUp() }
         XCTAssertTrue(failed.waitForExistence(timeout: 10))
         app.tabBars.buttons["录音"].tap()
-        XCTAssertFalse(app.staticTexts["原音已清理 · 纪要在回顾中保留"].exists)
+        XCTAssertFalse(app.staticTexts["原音已清理 · 整理内容已保留"].exists)
         app.cells.containing(.staticText, identifier: "差旅模拟会议").firstMatch.tap()
         XCTAssertTrue(app.buttons["播放"].exists)
         XCTAssertTrue(app.buttons["导出 M4A"].exists)

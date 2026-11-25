@@ -151,8 +151,10 @@ struct SpeechChunk: Decodable {
         // Older models returning prose can still produce minutes, but no timing evidence.
         guard clean.hasPrefix("{") || clean.hasPrefix("[") else { return (text, [], []) }
         let result = try JSONDecoder().decode(Self.self, from: Data(clean.utf8))
-        guard !result.minutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw JournalError.invalidTransfer
+        if result.minutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard result.energeticSpeech.isEmpty, result.transcript?.isEmpty != false,
+                  result.highlights?.isEmpty != false else { throw JournalError.invalidTransfer }
+            return ("", [], [])
         }
         let windows = result.energeticSpeech.compactMap { cue -> SpeechWindow? in
             guard cue.startSeconds.isFinite, cue.endSeconds.isFinite,
@@ -302,6 +304,28 @@ struct MeetingDigest: Codable, Identifiable, Sendable {
     var markers: [RecordingMarker]?
     var continuation: RecordingContinuation?
 
+    static let silenceSummary = "录音中仅检测到持续静音，未上传音频；没有可整理的录音内容。"
+    static let noSpeechSummary = "录音中没有听清可整理的内容。"
+
+    var journalParagraphs: [String] {
+        // Both the old and new silence summaries are status messages, not journal content.
+        let summary = minutes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard summary != Self.noSpeechSummary,
+              !summary.hasPrefix("录音中仅检测到持续静音，未上传音频") else { return [] }
+        let paragraphs = minutes.split(whereSeparator: \.isNewline).compactMap { raw -> String? in
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            // Old archives can contain headings such as “会议要点” above the actual content.
+            guard !line.hasPrefix("#"), !line.hasPrefix("```") else { return nil }
+            let prefix = ["- ", "* ", "• ", "> "].first(where: { line.hasPrefix($0) })
+            let paragraph = prefix.map { String(line.dropFirst($0.count)).trimmingCharacters(in: .whitespaces) } ?? line
+            let metadata = ["录制时间 ", "录音时长 ", "录音时段心率平均 ", "会议时段心率平均 "]
+            guard !metadata.contains(where: { paragraph.hasPrefix($0) }) else { return nil }
+            return paragraph.isEmpty ? nil : paragraph
+        }
+        if !paragraphs.isEmpty { return paragraphs }
+        return (citations ?? []).map(\.statement).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     var shareText: String {
         ([minutes] + (citations ?? []).map(\.shareText) +
          (markers ?? []).map { "\($0.label) · \(durationText($0.offset)) · 录音 \(id.uuidString)" } +
@@ -328,48 +352,49 @@ struct DailyJournalReport: Codable, Identifiable, Sendable {
     }
 
     static func preferred(in reports: [Self]) -> Self? {
-        // A fresh health-only day must not hide the latest meeting report.
-        reports.first { !$0.meetings.isEmpty } ?? reports.first { !$0.health.metrics.isEmpty }
+        reports.first { $0.meetings.contains { !$0.journalParagraphs.isEmpty } }
+            ?? reports.first { !$0.health.metrics.isEmpty }
     }
 
     var meetingIDs: Set<UUID> { Set(meetings.map(\.id)) }
 
+    var draftSourceNotes: [String] {
+        meetings.sorted { $0.startedAt < $1.startedAt }.compactMap { source in
+            let paragraphs = source.journalParagraphs
+            guard !paragraphs.isEmpty else { return nil }
+            let original = source.minutes.trimmingCharacters(in: .whitespacesAndNewlines)
+            return original.isEmpty ? paragraphs.joined(separator: "\n") : original
+        }
+    }
+
+    var journalExcerpt: String? {
+        for source in meetings.sorted(by: { $0.startedAt < $1.startedAt }) {
+            if let paragraph = source.journalParagraphs.first { return paragraph.journalExcerpt(limit: 176) }
+        }
+        return nil
+    }
+
     var narrative: DailyReportNarrative {
-        guard !meetings.isEmpty else {
-            return DailyReportNarrative(title: "健康日报", markdown: "当日没有已归档的会议。可在下方查看本日健康数据。")
-        }
         var seen: Set<String> = []
-        let notes = meetings.sorted { $0.startedAt < $1.startedAt }.map { meeting in
-            let cited = (meeting.citations ?? []).map(\.statement)
-            return cited.isEmpty ? [meeting.minutes.markdownExcerpt(limit: 176)] : cited
+        let notes = meetings.sorted { $0.startedAt < $1.startedAt }.map { source in
+            source.journalParagraphs.map { $0.journalExcerpt(limit: 360) }.filter { seen.insert($0).inserted }
+        }.filter { !$0.isEmpty }
+        if notes.isEmpty {
+            let message = health.metrics.isEmpty ? "这一天没有可整理的录音内容。"
+                : "这一天没有可整理的录音内容，可在下方查看健康数据。"
+            return DailyReportNarrative(title: "当日记录", markdown: message)
         }
-        var highlights: [String] = []
-        // Give each meeting a turn before taking additional highlights from a long meeting.
-        for round in 0..<3 {
-            for notesForMeeting in notes where notesForMeeting.indices.contains(round) {
-                let text = notesForMeeting[round].markdownExcerpt(limit: 176)
-                if !text.isEmpty, seen.insert(text).inserted { highlights.append("- \(text)") }
-                if highlights.count == 7 { break }
+        var selected = Array(repeating: [String](), count: notes.count)
+        var remaining = 12
+        // Give each source a turn, then present the chosen text in recording order.
+        picks: for paragraph in 0..<(notes.map(\.count).max() ?? 0) {
+            for index in notes.indices where notes[index].indices.contains(paragraph) {
+                selected[index].append(notes[index][paragraph])
+                remaining -= 1
+                if remaining == 0 { break picks }
             }
-            if highlights.count == 7 { break }
         }
-        let markdown = highlights.isEmpty ? "此日报已归档，暂时没有可显示的会议要点。" : highlights.joined(separator: "\n")
-        return DailyReportNarrative(title: "会议日报", markdown: markdown)
-    }
-
-    struct MeetingHour: Identifiable {
-        let hour: Int
-        let duration: TimeInterval
-        var id: Int { hour }
-    }
-
-    var meetingHours: [MeetingHour] {
-        let calendar = day.calendar
-        let totals = meetings.reduce(into: [Int: TimeInterval]()) { totals, meeting in
-            guard meeting.duration.isFinite, meeting.duration > 0 else { return }
-            totals[calendar.component(.hour, from: meeting.startedAt), default: 0] += meeting.duration
-        }
-        return totals.keys.sorted().compactMap { hour in totals[hour].map { MeetingHour(hour: hour, duration: $0) } }
+        return DailyReportNarrative(title: "当日记录", markdown: selected.flatMap { $0 }.joined(separator: "\n\n"))
     }
 }
 
@@ -404,13 +429,10 @@ struct DailyReportEdition: Codable, Equatable, Sendable {
 }
 
 private extension String {
-    func markdownExcerpt(limit: Int) -> String {
-        let text = split(whereSeparator: \.isNewline).map {
-            $0.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "#-*•>")))
-        }.filter { !$0.isEmpty }.joined(separator: " ")
-        if text.count <= limit { return text }
+    func journalExcerpt(limit: Int) -> String {
+        if count <= limit { return self }
         // Avoid leaving half a Markdown emphasis marker in a truncated excerpt.
-        return String(text.prefix(limit)).replacingOccurrences(of: "**", with: "") + "…"
+        return String(prefix(limit)).replacingOccurrences(of: "**", with: "") + "…"
     }
 }
 

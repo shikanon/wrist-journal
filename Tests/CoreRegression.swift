@@ -33,6 +33,9 @@ enum CoreRegression {
         let json = #"{"minutes":"会议决定","energeticSpeech":[{"startSeconds":10,"endSeconds":20,"evidence":"音量升高"},{"startSeconds":90,"endSeconds":130,"evidence":"越界"}]}"#
         let parsed = try SpeechChunk.parse(json, start: start, duration: 120)
         try check(parsed.0 == "会议决定" && parsed.1.count == 1 && parsed.1[0].start == start.addingTimeInterval(10), "validated chunk offsets")
+        let emptySegment = try SpeechChunk.parse(#"{"minutes":"","energeticSpeech":[],"transcript":[],"highlights":[]}"#, start: start, duration: 120)
+        try check(emptySegment.0.isEmpty && emptySegment.1.isEmpty && emptySegment.2.isEmpty,
+                  "a segment without intelligible speech contains no invented content")
         try check(try SpeechChunk.parse("普通文本纪要", start: start, duration: 120).1.isEmpty, "legacy prose has no invented cues")
         do {
             _ = try SpeechChunk.parse("{bad json}", start: start, duration: 120)
@@ -133,8 +136,29 @@ enum CoreRegression {
             try store.saveDailyEdition(invalidEdition, for: day)
             fatalError("Blank title replaced the saved edition")
         } catch { try check(try reopened.dailyEdition(day) == edition, "invalid edit does not replace the saved edition") }
-        try check(report.narrative.markdown.contains("决定与待办") && report.meetingHours.map(\.duration) == [120],
-            "legacy minutes produce useful highlights and real meeting duration on the home report")
+        try check(report.narrative.title == "当日记录" && report.narrative.markdown == "决定与待办",
+            "legacy minutes remain readable as neutral journal prose")
+        var journal = report
+        let morning = "沿河散步，看到银杏叶变黄了。"
+        let afternoon = "读书时想到可以按问题整理笔记。"
+        let later = "想留一点时间把笔记录下来。"
+        let evening = "给自行车打了气。"
+        let longRecording = MeetingDigest(id: UUID(), startedAt: start, duration: 7200, title: "口述",
+            location: nil, minutes: "## 早上\n\(morning)\n\n## 午后\n- \(afternoon)\n\n\(later)\n\n录音时长 02:00:00",
+            events: [], healthNote: nil)
+        let eveningRecording = MeetingDigest(id: UUID(), startedAt: start.addingTimeInterval(10800), duration: 60,
+            title: "随记", location: nil, minutes: "\(afternoon)\n\n\(evening)", events: [], healthNote: nil)
+        journal.meetings = [longRecording]
+        try check(journal.narrative.markdown == "\(morning)\n\n\(afternoon)\n\n\(later)" &&
+                  journal.draftSourceNotes.count == 1, "one long recording contributes several topics and can be drafted")
+        journal.meetings = [eveningRecording, longRecording]
+        try check(journal.narrative.markdown == "\(morning)\n\n\(afternoon)\n\n\(later)\n\n\(evening)" &&
+                  journal.journalExcerpt == morning, "journal skips metadata and duplicates and reads in time order")
+        journal.meetings = [MeetingDigest(id: UUID(), startedAt: start, duration: 60, title: "随记",
+            location: nil, minutes: MeetingDigest.silenceSummary, events: [], healthNote: nil)]
+        try check(journal.journalExcerpt == nil && journal.draftSourceNotes.isEmpty &&
+                  journal.narrative.markdown == "这一天没有可整理的录音内容。",
+                  "silent archive has an honest empty state and no AI draft input")
         try check(try reopened.pendingPurgeIDs().isEmpty, "acknowledgement survives restart")
         try check(try reopened.pendingDays().isEmpty, "restart only restores unfinished days")
         try store.receive(source, recording: recording)

@@ -14,7 +14,9 @@ actor AnalysisFixture {
               let body = request.httpBody,
               let object = try JSONSerialization.jsonObject(with: body) as? [String: Any],
               let messages = object["messages"] as? [[String: Any]],
-              let content = messages.last?["content"] as? [[String: Any]] else { throw JournalError.invalidTransfer }
+              let system = messages.first?["content"] as? String, system.contains("个人日志"),
+              let content = messages.last?["content"] as? [[String: Any]],
+              let prompt = content.last?["text"] as? String else { throw JournalError.invalidTransfer }
         requests += 1
         if failNext {
             failNext = false
@@ -28,11 +30,17 @@ actor AnalysisFixture {
         }
         let text: String
         if ProcessInfo.processInfo.arguments.contains("-journal-report-edition-simulation") {
-            guard audio == nil, content.count == 1, let prompt = content.first?["text"] as? String,
-                  prompt.contains("会议 1"), prompt.contains("会议 2"), !prompt.contains("私有图片说明"),
+            guard audio == nil, content.count == 1, prompt.contains("日记式日报"),
+                  prompt.contains("录音记录 1"),
+                  prompt.contains("沿河散步"), !prompt.contains("私有图片说明"),
                   !prompt.contains("编辑版：差旅与项目交接") else { throw JournalError.invalidTransfer }
-            text = "# 差旅与项目交接\n\n## 当日进展\n- 团队确认出行计划。\n\n## 待办\n- **下周跟进**交接事项。"
+            text = prompt.contains("录音记录 2")
+                ? "# 差旅与项目交接\n\n早上沿河散步，记下了一条路线。\n\n## 待办\n- **下周跟进**交接事项。"
+                : "# 河边散步\n\n早上沿河散步，记下了一条路线。"
         } else {
+            guard prompt.contains(audio == nil ? "长录音要保留不同主题" : "口述随记") else {
+                throw JournalError.invalidTransfer
+            }
             text = audio == nil ? "Watch 纪要：确认行动项，下周跟进。" :
                 #"{"minutes":"已讨论行动项","energeticSpeech":[{"startSeconds":1,"endSeconds":2,"evidence":"语速加快"}],"transcript":[{"startSeconds":1,"endSeconds":2,"text":"我们下周再跟进行动项。"}],"highlights":[{"statement":"下周跟进行动项","transcriptIndex":0}]}"#
         }

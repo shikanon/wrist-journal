@@ -56,7 +56,7 @@ struct DailyAnalysisConfirmation: View {
                     }
                     Section("原音去向") {
                         Text(scope.retainsAudio ? "保留原音；本机有音频时可以继续回听。" :
-                             "仅清理上述日期中已归档且满足备份要求的原音。清理后仍可查看纪要、标记和原文。")
+                             "仅清理上述日期中已归档且满足备份要求的原音。清理后仍可查看整理内容、标记和原文。")
                         Text(scope.mode == .watch ? "待分析的录音由 Watch 分段发送到火山方舟；结果回传后再归档。" :
                              "待分析的录音由 iPhone 分段发送到火山方舟。")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -130,7 +130,7 @@ struct DailyReportView: View {
                     }
                     Text(meeting.minutes).textSelection(.enabled)
                     MeetingLocationView(location: meeting.location)
-                    ShareLink(item: meeting.shareText) { Label("分享纪要与来源", systemImage: "square.and.arrow.up") }
+                    ShareLink(item: meeting.shareText) { Label("分享记录与来源", systemImage: "square.and.arrow.up") }
                     RecordingSourcesView(store: journal.store, recordingID: meeting.id, recordingTitle: meeting.title,
                         citations: meeting.citations ?? [], markers: meeting.markers ?? [], playback: playback)
                     ForEach(meeting.events) { event in
@@ -163,7 +163,7 @@ struct DailyReportView: View {
                         .font(.footnote)
                 }
             }
-        }.navigationTitle(report.day.localDate)
+        }.navigationTitle("录音与来源")
             .safeAreaInset(edge: .bottom, spacing: 0) { ReviewPlaybackBar(playback: playback) }
             .onDisappear { playback.stop() }
     }

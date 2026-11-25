@@ -253,7 +253,7 @@ struct SelectedReportList: View {
                             Section {
                                 Picker("归档时区", selection: Binding(get: { report.id }, set: { chosenZone = $0 })) {
                                     ForEach(reports) { value in
-                                        Text("\(value.day.timeZoneIdentifier) · \(value.meetings.count) 段会议").tag(value.id)
+                                        Text(value.day.timeZoneIdentifier).tag(value.id)
                                     }
                                 }
                             }
@@ -291,8 +291,6 @@ private struct PeriodArchiveSections: View {
                 Text(period.dateTitle(range)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                 Label("\(dates.count) 天有日报", systemImage: "calendar.badge.checkmark")
                     .font(.subheadline)
-                Label("\(review.meetingCount) 段 · \(durationText(review.duration))", systemImage: "bubble.left.and.bubble.right")
-                    .font(.subheadline.weight(.medium))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
@@ -323,9 +321,9 @@ private struct PeriodArchiveSections: View {
                     .accessibilityHint("查看该日日报")
                 }
             } header: {
-                Text("纪要摘录")
+                Text("当日记录摘录")
             } footer: {
-                Text("来自已有会议纪要。点开摘录可查看完整日报。")
+                Text("点开摘录可查看当天的完整日报。")
             }
         }
 
@@ -333,15 +331,10 @@ private struct PeriodArchiveSections: View {
         let groups = Dictionary(grouping: reports) { child.range(containing: $0.day.localDate) }
         Section(period == .month ? "本期周报" : "本期日报") {
             ForEach(groups.keys.compactMap { $0 }.sorted { $0.start > $1.start }) { item in
-                let entries = groups[item] ?? []
-                let count = entries.reduce(0) { $0 + $1.meetings.count }
                 Button { openPeriod(max(item.start, range.start), child) } label: {
                     LabeledContent(child.dateTitle(item)) {
-                        HStack {
-                            Text(count == 0 ? "健康日报" : "\(count) 段会议")
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary).accessibilityHidden(true)
                     }
                 }
                 .accessibilityIdentifier("report-calendar.drill.\(child.rawValue)")
@@ -374,11 +367,10 @@ private struct PeriodArchiveSections: View {
     private var representativeHighlights: [Highlight] {
         var seen: Set<String> = []
         var items: [Highlight] = []
-        for report in reports where !report.meetings.isEmpty && !seen.contains(report.day.localDate) {
-            guard let line = report.narrative.markdown.split(whereSeparator: \.isNewline).first,
-                  line.hasPrefix("- ") else { continue }
+        for report in reports where !seen.contains(report.day.localDate) {
+            guard let excerpt = report.journalExcerpt else { continue }
             seen.insert(report.day.localDate)
-            items.append(Highlight(date: report.day.localDate, text: String(line.dropFirst(2))))
+            items.append(Highlight(date: report.day.localDate, text: excerpt))
             if items.count == 5 { break }
         }
         return items
@@ -400,13 +392,19 @@ extension PhoneJournal {
         for (index, label) in [recent, week, month].compactMap({ $0 }).enumerated() {
             guard let start = ReportPeriod.date(label) else { continue }
             let day = JournalDayKey(localDate: label, timeZoneIdentifier: "UTC")
-            let meeting = MeetingDigest(id: UUID(), startedAt: start.addingTimeInterval(36000),
-                duration: 900, title: "项目同步", location: nil,
-                minutes: ["确认下一阶段的交付范围，周五核对设计稿。",
-                          "复盘试用反馈，优先处理上传流程。",
-                          "记录本月的项目决策和下一步计划。"][index],
+            let source = MeetingDigest(id: UUID(), startedAt: start.addingTimeInterval(36000),
+                duration: 5400, title: "随手记录", location: nil,
+                minutes: ["""
+                    早上沿河走了一段，桥边的银杏已经变黄。下次想带相机去拍几张。
+
+                    午后试着把零散的读书笔记归到同一页，按问题整理，比按章节翻找更方便。
+
+                    晚些时候想起来，出门前要给自行车打气。
+                    """,
+                    "找到一家周末也开门的图书馆，想找个下午去看看。",
+                    "把家里积攒的旧照片分了几类，先整理旅行的那一盒。"][index],
                 events: [], healthNote: nil)
-            try store.saveDaily(DailyJournalReport(day: day, generatedAt: .now, meetings: [meeting],
+            try store.saveDaily(DailyJournalReport(day: day, generatedAt: .now, meetings: [source],
                 health: HealthDay(start: start, localDate: label), healthNote: nil,
                 thresholds: HeartRateSettings(), cloudBackupRequired: false, retainsAudio: true))
         }

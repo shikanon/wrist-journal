@@ -107,10 +107,10 @@ private struct PhoneRecordings: View {
                                         .font(.subheadline.monospacedDigit())
                                         .foregroundStyle(.secondary)
                                     if let job = journal.jobs[entry.id], job.state == .complete {
-                                        Text("会议纪要已生成").font(.caption).foregroundStyle(.secondary)
+                                        Text("录音已整理").font(.caption).foregroundStyle(.secondary)
                                     }
                                     if entry.rawDeletedAt != nil {
-                                        Text("原音已清理 · 纪要在回顾中保留").font(.caption).foregroundStyle(.secondary)
+                                        Text("原音已清理 · 整理内容已保留").font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -245,7 +245,7 @@ private struct PhoneRecording: View {
                     }
                     .foregroundStyle(.secondary)
                 }
-                Section("会议地点") {
+                Section("录音地点") {
                     MeetingLocationView(location: entry.location)
                 }
                 meetingAnalysis(entry, hasLocalAudio: audio.url != nil)
@@ -277,7 +277,7 @@ private struct PhoneRecording: View {
     }
 
     private func meetingAnalysis(_ entry: Recording, hasLocalAudio: Bool) -> some View {
-        Section("会议分析") {
+        Section("录音整理") {
             if let job = journal.jobs[id] {
                 switch job.state {
                 case .queued:
@@ -286,7 +286,7 @@ private struct PhoneRecording: View {
                             ProgressView("正在分析第 \(job.notes.count + 1) / \(job.totalChunks) 段",
                                          value: Double(job.notes.count), total: Double(job.totalChunks))
                         } else {
-                            ProgressView(job.totalChunks == 0 ? "正在准备录音" : "正在整理会议纪要")
+                            ProgressView(job.totalChunks == 0 ? "正在准备录音" : "正在整理录音")
                         }
                     } else {
                         Text("等待分析").foregroundStyle(.secondary)
@@ -297,7 +297,7 @@ private struct PhoneRecording: View {
                     if let minutes = job.minutes {
                         Text(minutes).textSelection(.enabled)
                         ShareLink(item: ([minutes] + (job.citations ?? []).map(\.shareText)).joined(separator: "\n\n")) {
-                            Label("分享纪要与来源", systemImage: "square.and.arrow.up")
+                            Label("分享记录与来源", systemImage: "square.and.arrow.up")
                         }
                     }
                 }
@@ -311,8 +311,8 @@ private struct PhoneRecording: View {
                         Button("开始分析") { Task { await journal.analyze(entry) } }
                     } message: {
                         Text(journal.includeContext
-                             ? "将分段上传这条录音，并附上可用的会议时段心率汇总。"
-                             : "将分段上传这条录音。会议纪要会保存在此 iPhone。")
+                             ? "将分段上传这条录音，并附上可用的录音时段心率汇总。"
+                             : "将分段上传这条录音。整理结果会保存在此 iPhone。")
                     }
             }
         }
@@ -465,7 +465,7 @@ private struct AdvancedJournalSettings: View {
             Section {
                 Toggle("分析时附加心率汇总", isOn: $journal.includeContext)
             } footer: {
-                Text("向分析服务发送会议时段的心率汇总。地点可在手表「录音设置」开启记录。")
+                Text("向分析服务发送录音时段的心率汇总。地点可在手表「录音设置」开启记录。")
             }
             Section {
                 Toggle("仅充电时自动分析", isOn: $journal.dailySettings.chargingOnly)
@@ -496,7 +496,7 @@ private struct AdvancedJournalSettings: View {
                 }
                 LabeledContent("健康统计时区", value: journal.dailySettings.healthTimeZoneIdentifier ?? TimeZone.current.identifier)
             } footer: {
-                Text("系统模式读取已有心率与运动数据。精准模式在手表录音期间主动采集更细的手腕运动，并监听新增心率；结束即停止，更耗电。心率采样频率仍由 watchOS 控制，普通会议不会启动训练或保证连续心率。设置同步到手表后，对下一段录音生效。")
+                Text("系统模式读取已有心率与运动数据。精准模式在手表录音期间主动采集更细的手腕运动，并监听新增心率；结束即停止，更耗电。心率采样频率仍由 watchOS 控制，录音不会启动训练或保证连续心率。设置同步到手表后，对下一段录音生效。")
             }
             Section {
                 Stepper("高心率：\(Int(journal.dailySettings.thresholds.highBPM)) bpm",
